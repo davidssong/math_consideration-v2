@@ -1,0 +1,1252 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>수학, 그에 대한 깊은 고찰 (Drive)</title>
+<style>
+  html,body{ margin:0; padding:0; background:#ffffff; }
+  #root{ min-height:100vh; }
+  #boot{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:#16110b; color:#e7c982; z-index:9999; font-family:ui-monospace,Menlo,Consolas,monospace; letter-spacing:2px; font-size:14px; }
+</style>
+<script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+</head>
+<body>
+<div id="boot">화면을 불러오는 중…</div>
+<div id="root"></div>
+<script>
+(function(){
+  function show(msg){ var b=document.getElementById("boot"); if(!b) return; b.style.flexDirection="column"; b.style.padding="24px"; b.style.textAlign="center"; b.style.fontSize="13px"; b.style.lineHeight="1.6"; b.style.whiteSpace="pre-wrap"; b.innerHTML="<div style='color:#e7c982;font-weight:700;margin-bottom:8px'>실행 중 문제가 발생했어요</div><div style='color:#cdbf9c;max-width:680px'>"+String(msg).replace(/</g,"&lt;")+"</div>"; }
+  window.__mgShow=show;
+  window.addEventListener("error", function(e){ show((e&&e.message?e.message:"스크립트 오류")+(e&&e.filename?"\n("+e.filename+":"+e.lineno+")":"")); });
+  window.addEventListener("unhandledrejection", function(e){ show("Promise 오류: "+(e&&e.reason?(e.reason.message||e.reason):"알 수 없음")); });
+  setTimeout(function(){ if(!document.getElementById("boot")) return; var miss=[]; if(typeof React==="undefined") miss.push("React"); if(typeof ReactDOM==="undefined") miss.push("ReactDOM"); if(typeof Babel==="undefined") miss.push("Babel"); if(miss.length) show("CDN 로딩 실패: "+miss.join(", ")+"\nunpkg.com 접근이 막혔을 수 있어요."); else show("화면 구성이 지연됐어요. 콘솔(F12) 오류를 알려주세요."); }, 9000);
+})();
+</script>
+
+<script type="text/babel" data-presets="react">
+
+const { useState, useRef, useCallback, useEffect } = React;
+function _sheetUrl(){ return (localStorage.getItem("mg_sheet_url")||"").trim(); }
+window.__mgDriveUrl = function(id){ return "https://drive.google.com/thumbnail?id="+encodeURIComponent(id)+"&sz=w1600"; };
+
+/* ---- IndexedDB (5MB 제한 없음) ---- */
+var IDB_NAME="mathguide_drive", IDB_STORE="kv", _idbP=null;
+function _idb(){ if(_idbP) return _idbP; _idbP=new Promise(function(res,rej){ var r=indexedDB.open(IDB_NAME,1); r.onupgradeneeded=function(){ try{ r.result.createObjectStore(IDB_STORE); }catch(e){} }; r.onsuccess=function(){ res(r.result); }; r.onerror=function(){ rej(r.error); }; }); return _idbP; }
+function _idbGet(k){ return _idb().then(function(db){ return new Promise(function(res){ var t=db.transaction(IDB_STORE,"readonly").objectStore(IDB_STORE).get(k); t.onsuccess=function(){ res(t.result==null?null:t.result); }; t.onerror=function(){ res(null); }; }); }); }
+function _idbSet(k,v){ return _idb().then(function(db){ return new Promise(function(res){ var t=db.transaction(IDB_STORE,"readwrite").objectStore(IDB_STORE).put(v,k); t.onsuccess=function(){ res(true); }; t.onerror=function(){ res(false); }; }); }); }
+function _idbDel(k){ return _idb().then(function(db){ return new Promise(function(res){ var t=db.transaction(IDB_STORE,"readwrite").objectStore(IDB_STORE).delete(k); t.onsuccess=function(){ res(true); }; t.onerror=function(){ res(false); }; }); }); }
+function _idbKeys(){ return _idb().then(function(db){ return new Promise(function(res){ var t=db.transaction(IDB_STORE,"readonly").objectStore(IDB_STORE).getAllKeys(); t.onsuccess=function(){ res(t.result||[]); }; t.onerror=function(){ res([]); }; }); }); }
+
+/* ---- 시트/드라이브 전송 ---- */
+function _postSet(k,val){ var url=_sheetUrl(); if(!url) return; try{ fetch(url,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"set",key:k,value:val})}); }catch(e){} }
+function _postImg(k,media,b64){ var url=_sheetUrl(); if(!url) return; try{ fetch(url,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"img",imgKey:k,media:media||"image/jpeg",b64:b64})}); }catch(e){} }
+function _push(k,v){
+  var url=_sheetUrl(); if(!url) return;
+  if(k.indexOf("pdf:")===0) return; // PDF 원본 로컬 전용
+  if(k.indexOf("prob:")===0){
+    var o; try{ o=JSON.parse(v); }catch(e){ _postSet(k,v); return; }
+    var noImg=Object.assign({},o); delete noImg.b64; delete noImg.media;
+    _postSet(k, JSON.stringify(noImg));        // 설명·분석 → 시트
+    if(o && o.b64){ _postImg(k, o.media, o.b64); } // 사진 원본 → 드라이브
+    return;
+  }
+  _postSet(k, v);
+}
+function _del(k){ var url=_sheetUrl(); if(!url) return; try{ fetch(url,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"delete",key:k})}); }catch(e){} }
+
+window.storage = {
+  async get(k){ var v=await _idbGet(k); return v==null?null:{key:k,value:v}; },
+  async set(k,v){ await _idbSet(k,v); _push(k,v); return {key:k,value:v}; },
+  async delete(k){ await _idbDel(k); _del(k); return {key:k,deleted:true}; },
+  async list(prefix){ var ks=await _idbKeys(); return {keys: ks.filter(function(k){ return !prefix || (typeof k==="string" && k.indexOf(prefix)===0); })}; },
+};
+
+window.__mgPull = function(){
+  return new Promise(function(resolve){
+    var url=_sheetUrl(); if(!url){ resolve(false); return; }
+    var cb="mgcb"+Date.now(); var s=document.createElement("script"); var done=false;
+    window[cb]=function(rows){
+      done=true;
+      (async function(){
+        try{
+          rows=rows||[];
+          var imgMap={};
+          rows.forEach(function(r){ if(r&&r.key&&r.key.indexOf("img:")===0){ imgMap[r.key.slice(4)]=r.value; } });
+          for(var i=0;i<rows.length;i++){
+            var r=rows[i]; if(!r||!r.key) continue;
+            if(r.key.indexOf("img:")===0) continue;
+            if(r.key.indexOf("prob:")===0){
+              var ro; try{ ro=JSON.parse(r.value); }catch(e){ continue; }
+              if(imgMap[r.key]) ro.imgId=imgMap[r.key];
+              var local=await _idbGet(r.key);
+              if(local){ try{ var lo=JSON.parse(local); if(lo.b64){ ro.b64=lo.b64; ro.media=lo.media; } }catch(e){} }
+              await _idbSet(r.key, JSON.stringify(ro));
+            } else {
+              await _idbSet(r.key, r.value);
+            }
+          }
+        }finally{ try{ delete window[cb]; document.head.removeChild(s); }catch(e){} resolve(true); }
+      })();
+    };
+    s.onerror=function(){ try{ delete window[cb]; }catch(e){} resolve(false); };
+    s.src=url+(url.indexOf("?")>=0?"&":"?")+"action=list&callback="+cb+"&_="+Date.now();
+    document.head.appendChild(s);
+    setTimeout(function(){ if(!done){ try{ delete window[cb]; }catch(e){} resolve(false); } }, 15000);
+  });
+};
+
+
+
+// 수학 길잡이 — 핵심 단어 짚기 · 단계별 힌트 · 최종 풀이 · 단원별 보관함
+// 한지(韓紙) 톤 · Gowun Batang/Dodum · 키 없이 claude.ai 플랜으로 동작
+
+const C = {
+  paper: "#f4ecdb", card: "#fbf6ec", grid: "#ebe0c8", ink: "#322b21", muted: "#7c6e58", line: "#ddcdac",
+  amber: "#e7c982",        // 형광(금빛)
+  clay: "#a8543a",         // 주요 강조(점토색)
+  claySoft: "#f0e2d8",
+  warn: "#c0563a", warnSoft: "#f4e6da",
+  green: "#5f7d4f",        // 풀이/완료
+  greenSoft: "#e9efe0",
+};
+
+const STYLES = `
+@import url('https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=Gowun+Dodum&display=swap');
+.mg-root *, .mg-root *::before, .mg-root *::after { box-sizing: border-box; }
+.mg-root {
+  font-family: "Gowun Dodum", -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  color: ${C.ink}; min-height: 100vh; background-color: #ffffff;
+  -webkit-font-smoothing: antialiased;
+}
+.mg-serif { font-family: "Gowun Batang", serif; }
+.mg-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-feature-settings: "tnum"; }
+.mg-eyebrow { letter-spacing: .12em; text-transform: uppercase; }
+.mg-drop.drag { border-color: ${C.clay} !important; background: ${C.claySoft} !important; }
+.mg-btn { transition: transform .12s, box-shadow .12s, background-color .15s, opacity .15s; cursor: pointer; }
+.mg-btn:not(:disabled):hover { transform: translateY(-1px); }
+.mg-btn:not(:disabled):active { transform: translateY(0); }
+.mg-btn:disabled { opacity: .45; cursor: not-allowed; }
+.mg-btn:focus-visible { outline: 2.5px solid ${C.clay}; outline-offset: 2px; }
+.mg-hl { background-image: linear-gradient(180deg, transparent 54%, ${C.amber} 54%, ${C.amber} 92%, transparent 92%); padding: 0 .1em; border-radius: 1px; }
+.mg-reveal { animation: mgIn .45s cubic-bezier(.2,.7,.3,1) both; }
+@keyframes mgIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.mg-spin { animation: mgSpin .9s linear infinite; }
+@keyframes mgSpin { to { transform: rotate(360deg); } }
+.mg-root .katex { font-size: 1.04em; }
+.mg-tabs { display: flex; gap: 7px; overflow-x: auto; padding-bottom: 4px; -webkit-overflow-scrolling: touch; }
+.mg-tabs::-webkit-scrollbar { height: 0; }
+.mg-card { transition: border-color .15s, box-shadow .15s, transform .15s; }
+.mg-card:hover { border-color: ${C.clay}; box-shadow: 0 10px 26px -18px rgba(50,43,33,.4); transform: translateY(-2px); }
+@media (prefers-reduced-motion: reduce) { .mg-reveal, .mg-spin, .mg-btn, .mg-card { animation: none !important; transition: none !important; } }
+`;
+
+const ANALYZE_PROMPT = `너는 한국 고등학생을 돕는 수학 길잡이야. 업로드된 수학 문제 사진을 분석해.
+규칙: 이 응답에서는 절대 최종 정답이나 끝까지의 계산을 주지 마라. "어떻게 시작하고 어떤 순서로 풀어갈지" 방향만 안내해.
+JSON으로만, 다른 말과 마크다운 백틱 없이 응답:
+{"readable":true 또는 false,"message":"사진을 못 읽을 때만 이유(읽으면 빈 문자열)","summary":"무엇을 구하는 문제인지 한 문장","intent":"추정되는 출제자의 의도와 이 문제로 확인하려는 개념·사고력(2~3문장)","concepts":["관련 단원/개념 2~4개"],"keyTerms":[{"term":"핵심 단어/문구","signal":"이 표현이 주는 신호와 떠올릴 도구·공식(1~2문장)"}],"approach":[{"step":"이 단계에서 할 일(정답 X, 방향만)","why":"왜 이렇게 하는지 짧게"}],"watchOut":["자주 하는 실수 1~3개"]}
+제약(중요): 응답은 반드시 1000토큰 안에 끝나야 하니 매우 간결하게. concepts는 교육과정 단원명 위주(예: 수열, 미분, 확률). keyTerms 3개, approach 3~4단계, watchOut 최대 2개. signal·why는 각각 한 문장. 수식은 LaTeX로 달러기호 사이에(예: 인라인 $a_n=ar^{n-1}$). 한국어로.`;
+
+const SOLVE_PROMPT = `이 수학 문제의 완전한 풀이 과정을 처음부터 끝까지 보여줘. 각 단계마다 무엇을·왜 하는지 설명하고 마지막에 최종 답을 명확히.
+JSON으로만, 다른 말과 마크다운 백틱 없이 응답:
+{"steps":[{"title":"단계 제목","detail":"설명과 계산"}],"finalAnswer":"최종 답"}
+제약(중요): 응답은 반드시 1000토큰 안에 끝나야 하니 간결하게. 단계는 5개 이하, 각 detail은 핵심만. 수식은 모두 인라인 $...$로만 감싸라(달러는 짝을 맞추고 $$는 쓰지 마라). 한국어로.`;
+
+// PDF에서 특정 번호 문제만 찾아 옮겨 적기
+const TRANSCRIBE_PDF = (num) => `이 PDF는 수학 시험지야. ${num}번 문제를 찾아라.
+JSON으로만, 다른 말과 마크다운 백틱 없이 응답:
+{"found":true 또는 false,"message":"못 찾으면 이유(찾으면 빈 문자열)","number":"${num}","problemText":"${num}번 문제의 전문을 정확히 옮겨 적기. 수식은 LaTeX로 달러기호 사이에. 그림·그래프·표가 있으면 [그림: 무엇을 나타내는지 한 줄 설명]으로 표기."}
+제약: 반드시 1000토큰 안에. ${num}번 '한 문제'만. 원문 그대로, 임의로 바꾸지 마라. 한국어 설명.`;
+
+// 텍스트 문제로 분석
+const ANALYZE_TEXT = (t) => `다음 수학 문제를 분석해. 최종 정답·끝까지의 계산은 주지 말고 접근 방향만.
+[문제]
+${t}
+[/문제]
+JSON으로만, 백틱 없이: {"summary":"한 문장","intent":"추정되는 출제자의 의도와 이 문제로 확인하려는 개념·사고력(2~3문장)","concepts":["단원/개념 2~4개"],"keyTerms":[{"term":"핵심 단어","signal":"신호·공식 1~2문장"}],"approach":[{"step":"할 일(방향만)","why":"이유 짧게"}],"watchOut":["실수 1~2개"]}
+제약: 1000토큰 내. keyTerms 3개, approach 3~4단계, watchOut 최대 2개. 수식 LaTeX $...$. 한국어.`;
+
+// 텍스트 문제로 풀이
+const SOLVE_TEXT = (t) => `다음 수학 문제의 완전한 풀이를 단계별로, 마지막에 최종 답을 명확히.
+[문제]
+${t}
+[/문제]
+JSON으로만, 백틱 없이: {"steps":[{"title":"제목","detail":"설명·계산"}],"finalAnswer":"최종 답"}
+제약: 1000토큰 내, 5단계 이하. 수식은 인라인 $...$로만(짝 맞춰서, $$ 금지). 한국어.`;
+
+// 출제 의도만 따로 (기존 문제 소급용)
+const INTENT_TEXT = (t) => `다음 수학 문제를 보고, 추정되는 출제자의 의도와 이 문제로 무엇(어떤 개념·사고력)을 확인하려는지 정리해.
+[문제]
+${t}
+[/문제]
+JSON으로만, 백틱 없이: {"intent":"2~3문장"}. 수식은 인라인 $...$로만. 한국어.`;
+const INTENT_IMG = `이미지의 수학 문제를 보고, 추정되는 출제자의 의도와 이 문제로 무엇(어떤 개념·사고력)을 확인하려는지 정리해.
+JSON으로만, 백틱 없이: {"intent":"2~3문장"}. 수식은 인라인 $...$로만. 한국어.`;
+
+function readBase64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => { const d = String(r.result || ""); const c = d.indexOf(","); res(c < 0 ? "" : d.slice(c + 1)); };
+    r.onerror = () => rej(new Error("read"));
+    r.readAsDataURL(file);
+  });
+}
+
+function processImage(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const dataUrl = String(r.result || "");
+      const comma = dataUrl.indexOf(",");
+      if (comma < 0) { rej(new Error("read")); return; }
+      const b64 = dataUrl.slice(comma + 1);
+      let media = (file.type || "image/jpeg").toLowerCase();
+      if (media === "image/jpg") media = "image/jpeg";
+      if (!["image/jpeg", "image/png", "image/gif", "image/webp"].includes(media)) { rej(new Error("unsupported:" + media)); return; }
+      res({ b64, media, preview: dataUrl });
+    };
+    r.onerror = () => rej(new Error("read"));
+    r.readAsDataURL(file);
+  });
+}
+
+function parseLoose(text) {
+  const start = text.indexOf("{");
+  if (start === -1) throw new Error("JSON을 찾지 못함");
+  let body = text.slice(start);
+  const lastClose = body.lastIndexOf("}");
+  if (lastClose !== -1) { try { return JSON.parse(body.slice(0, lastClose + 1)); } catch (e) {} }
+  const stack = []; let inStr = false, esc = false, out = "";
+  for (const ch of body) {
+    out += ch;
+    if (esc) { esc = false; continue; }
+    if (ch === "\\") { esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === "{") stack.push("}"); else if (ch === "[") stack.push("]");
+    else if (ch === "}" || ch === "]") stack.pop();
+  }
+  if (inStr) out += '"';
+  out = out.replace(/,\s*$/, "").replace(/:\s*$/, ':""');
+  while (stack.length) out += stack.pop();
+  return JSON.parse(out);
+}
+
+// KaTeX 자동 렌더러가 $$(디스플레이)와 $(인라인)를 섞어 만나면 짝을 잘못 맞춰
+// 뒤쪽 수식을 놓치는 일이 있다. 모든 $$를 $로 통일해 섞임을 제거한다.
+function normDollars(s) { return String(s).replace(/\$\$/g, "$"); }
+function deepNorm(v) {
+  if (typeof v === "string") return normDollars(v);
+  if (Array.isArray(v)) return v.map(deepNorm);
+  if (v && typeof v === "object") { const o = {}; for (const k in v) o[k] = deepNorm(v[k]); return o; }
+  return v;
+}
+
+async function askClaude(blocks, prompt) {
+  if (!(localStorage.getItem("mg_api_key") || "").trim()) {
+    throw new Error("HTML에서 분석하려면 ⚙ 설정에 본인 API 키를 넣으세요. (무료는 claude.ai 아티팩트에서)");
+  }
+  let resp;
+  try {
+    resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST", headers: { "Content-Type": "application/json", "x-api-key": (localStorage.getItem("mg_api_key")||"").trim(), "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+      body: JSON.stringify({
+        model: (localStorage.getItem("mg_model")||"claude-sonnet-4-6"), max_tokens: 1000,
+        messages: [{ role: "user", content: [...blocks, { type: "text", text: prompt }] }],
+      }),
+    });
+  } catch (e) { throw new Error("네트워크 연결 실패"); }
+  const data = await resp.json();
+  if (data && data.error) throw new Error(data.error.message || "API 오류");
+  const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
+  if (!text.trim()) throw new Error("빈 응답");
+  try { return deepNorm(parseLoose(text)); } catch (e) { throw new Error("응답 해석 실패(잘렸을 수 있음)"); }
+}
+const imgBlock = (media, b64) => ({ type: "image", source: { type: "base64", media_type: media, data: b64 } });
+const pdfBlock = (b64) => ({ type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } });
+
+async function loadLibrary() {
+  try {
+    if (!window.storage) return [];
+    const listed = await window.storage.list("prob:");
+    const keys = ((listed && listed.keys) || []).map(k => (typeof k === "string" ? k : k && k.key)).filter(Boolean);
+    const items = [];
+    for (const k of keys) { try { const r = await window.storage.get(k); if (r && r.value) items.push(JSON.parse(r.value)); } catch (e) {} }
+    items.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    return items;
+  } catch (e) { return []; }
+}
+async function saveProblem(p) { if (window.storage) await window.storage.set("prob:" + p.id, JSON.stringify(p)); }
+async function deleteProblem(id) { if (window.storage) await window.storage.delete("prob:" + id); }
+// PDF 원본 보관 (용량이 허용될 때만). 폴더에서 다른 번호를 바로 분석하기 위함.
+async function savePdfBlob(pdfId, b64) {
+  try { if (window.storage && b64 && b64.length < 4800000) await window.storage.set("pdf:" + pdfId, b64); } catch (e) {}
+}
+async function loadPdfBlob(pdfId) {
+  try { if (!window.storage) return null; const r = await window.storage.get("pdf:" + pdfId); return r && r.value ? r.value : null; } catch (e) { return null; }
+}
+async function deletePdfBlob(pdfId) { try { if (window.storage) await window.storage.delete("pdf:" + pdfId); } catch (e) {} }
+// 사용자가 직접 만드는 폴더
+async function loadFolders() {
+  try {
+    if (!window.storage) return [];
+    const l = await window.storage.list("folder:");
+    const keys = ((l && l.keys) || []).map(k => (typeof k === "string" ? k : k && k.key)).filter(Boolean);
+    const out = [];
+    for (const k of keys) { try { const r = await window.storage.get(k); if (r && r.value) out.push(JSON.parse(r.value)); } catch (e) {} }
+    out.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    return out;
+  } catch (e) { return []; }
+}
+async function saveFolder(f) { if (window.storage) await window.storage.set("folder:" + f.id, JSON.stringify(f)); }
+async function deleteFolderKey(id) { if (window.storage) await window.storage.delete("folder:" + id); }
+
+function escHtml(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function buildExportHTML(lib) {
+  const units = Array.from(new Set(lib.flatMap(p => p.concepts || [])));
+  const tabs = ['<button class="tab active" data-u="__all">전체 (' + lib.length + ')</button>']
+    .concat(units.map(u => '<button class="tab" data-u="' + escHtml(u) + '">' + escHtml(u) + " (" + lib.filter(p => (p.concepts || []).includes(u)).length + ")</button>")).join("");
+  const cards = lib.map(p => {
+    const r = p.result || {};
+    const chips = (p.concepts || []).map(c => '<span class="chip">' + escHtml(c) + "</span>").join("");
+    const kt = (r.keyTerms || []).map(t => '<div class="row"><b class="hl">' + escHtml(t.term) + '</b><div class="muted">' + escHtml(t.signal) + "</div></div>").join("");
+    const ap = (r.approach || []).map((a, i) => '<div class="row"><b>' + (i + 1) + ". " + escHtml(a.step) + "</b>" + (a.why ? '<div class="muted">' + escHtml(a.why) + "</div>" : "") + "</div>").join("");
+    const wo = (r.watchOut || []).map(w => '<div class="muted">! ' + escHtml(w) + "</div>").join("");
+    const sol = p.solution ? ('<div class="sol"><h4>최종 풀이</h4>' + (p.solution.steps || []).map((s, i) => '<div class="row"><b>' + (i + 1) + ". " + escHtml(s.title) + "</b><div>" + escHtml(s.detail) + "</div></div>").join("") + (p.solution.finalAnswer ? '<div class="ans">최종 답: ' + escHtml(p.solution.finalAnswer) + "</div>" : "") + "</div>") : "";
+    const media = p.b64 ? ('<img src="data:' + escHtml(p.media) + ";base64," + p.b64 + '" />') : (p.result && p.result.problemText ? '<div class="ptext">' + escHtml(p.result.problemText) + "</div>" : "");
+    const intent = r.intent ? '<h4>출제 의도</h4><div class="muted">' + escHtml(r.intent) + "</div>" : "";
+    return '<div class="card" data-units="' + escHtml((p.concepts || []).join("|")) + '">' + media + "<h3>" + escHtml(r.summary || "문제") + "</h3><div>" + chips + "</div>" + intent + (kt ? "<h4>핵심 단어</h4>" + kt : "") + (ap ? "<h4>접근 경로</h4>" + ap : "") + (wo ? "<h4>주의</h4>" + wo : "") + sol + "</div>";
+  }).join("");
+  return '<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>수학 길잡이 보관함</title>' +
+    '<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css"/>' +
+    "<link rel='stylesheet' href='https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=Gowun+Dodum&display=swap'/>" +
+    "<style>body{font-family:'Gowun Dodum',-apple-system,sans-serif;max-width:860px;margin:0 auto;padding:24px;color:#322b21;background:#f4ecdb}h1,h3,h4{font-family:'Gowun Batang',serif}h1{font-size:26px}" +
+    ".tabs{display:flex;gap:7px;flex-wrap:wrap;margin:16px 0;position:sticky;top:0;background:#f4ecdb;padding:8px 0}.tab{border:1px solid #ddcdac;background:#fbf6ec;border-radius:999px;padding:7px 13px;font-size:13px;cursor:pointer}.tab.active{background:#322b21;color:#f4ecdb;border-color:#322b21}" +
+    ".card{background:#fbf6ec;border:1px solid #ddcdac;border-radius:14px;padding:18px;margin-bottom:16px}.card img{max-width:100%;border-radius:8px;border:1px solid #ddcdac}h3{font-size:18px;margin:12px 0 8px}h4{font-size:13px;color:#a8543a;margin:14px 0 6px;letter-spacing:.05em}" +
+    ".chip{display:inline-block;font-size:12px;color:#a8543a;background:#f0e2d8;padding:4px 10px;border-radius:999px;margin:0 5px 5px 0}.row{padding:7px 0;border-top:1px solid #ece0c6}.muted{color:#7c6e58;font-size:14px;margin-top:3px}.hl{background:linear-gradient(180deg,transparent 55%,#e7c982 55%)}" +
+    ".sol{margin-top:14px;background:#e9efe0;border-radius:10px;padding:14px}.ans{margin-top:10px;font-weight:700}.ptext{white-space:pre-wrap;background:#f4ecdb;border:1px solid #ddcdac;border-radius:8px;padding:12px;font-size:14px;line-height:1.6}</style></head><body>" +
+    "<h1>📐 수학 길잡이 보관함</h1><div class='tabs'>" + tabs + "</div><div id='list'>" + cards + "</div>" +
+    "<script src='https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js'><\/script><script src='https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js'><\/script><script>" +
+    "document.querySelectorAll('.tab').forEach(function(t){t.onclick=function(){document.querySelectorAll('.tab').forEach(function(x){x.classList.remove('active')});t.classList.add('active');var u=t.getAttribute('data-u');document.querySelectorAll('.card').forEach(function(c){var us=(c.getAttribute('data-units')||'').split('|');c.style.display=(u==='__all'||us.indexOf(u)>=0)?'block':'none'})}});" +
+    "window.addEventListener('load',function(){renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}],throwOnError:false})});<\/script></body></html>";
+}
+
+// HTML(standalone) 빌드에서만 동기화/가져오기 UI를 노출 (아티팩트에는 window.__mgPull 없음)
+const IS_HTML = typeof window !== "undefined" && typeof window.__mgPull === "function";
+// 이미지 소스: 로컬 원본(b64) 우선, 없으면 드라이브(imgId)
+function mgImgUrl(o) {
+  if (!o) return null;
+  if (o.b64) return "data:" + (o.media || "image/jpeg") + ";base64," + o.b64;
+  if (o.imgId && typeof window !== "undefined" && window.__mgDriveUrl) return window.__mgDriveUrl(o.imgId);
+  return null;
+}
+
+function App() {
+  const [preview, setPreview] = useState(null);
+  const [imgData, setImgData] = useState(null);
+  const [media, setMedia] = useState(null);
+  const [drag, setDrag] = useState(false);
+  const [status, setStatus] = useState("idle");
+  const [result, setResult] = useState(null);
+  const [errMsg, setErrMsg] = useState("");
+  const [revealed, setRevealed] = useState(1);
+  const [solution, setSolution] = useState(null);
+  const [solState, setSolState] = useState("idle");
+  const [katexReady, setKatexReady] = useState(false);
+  const [diag, setDiag] = useState("");
+  const [isPdf, setIsPdf] = useState(false);
+  const [pdfB64, setPdfB64] = useState(null);
+  const [pdfName, setPdfName] = useState("");
+  const [pdfId, setPdfId] = useState(null);
+  const [probNum, setProbNum] = useState("");
+  const [library, setLibrary] = useState([]);
+  const [view, setView] = useState("analyze");
+  const [activeUnit, setActiveUnit] = useState("__all");
+  const [libMode, setLibMode] = useState("my");   // my(내 폴더) | pdf | unit
+  const [openFolder, setOpenFolder] = useState(null); // 열린 PDF(자동) 폴더의 pdfId
+  const [myFolders, setMyFolders] = useState([]);
+  const [openMyFolder, setOpenMyFolder] = useState(null);
+  const [selecting, setSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [showNewFolder, setShowNewFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [pendingMove, setPendingMove] = useState(false);
+  const [editingFolderId, setEditingFolderId] = useState(null);
+  const [editName, setEditName] = useState("");
+  const [confirmDelId, setConfirmDelId] = useState(null);
+  const [libMsg, setLibMsg] = useState("");
+  const [backupText, setBackupText] = useState("");
+  const [showCfg, setShowCfg] = useState(false);
+  const [cfgUrl, setCfgUrl] = useState("");
+  const [cfgKey, setCfgKey] = useState("");
+  const [cfgImport, setCfgImport] = useState("");
+  const [cfgMsg, setCfgMsg] = useState("");
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillMsg, setBackfillMsg] = useState("");
+  const [currentFolderId, setCurrentFolderId] = useState(null);
+  const [currentId, setCurrentId] = useState(null);
+  const [saved, setSaved] = useState(false);
+  const inputRef = useRef(null);
+  const mathRef = useRef(null);
+
+  useEffect(() => {
+    if (window.renderMathInElement) { setKatexReady(true); return; }
+    const css = document.createElement("link");
+    css.rel = "stylesheet"; css.href = "https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css";
+    document.head.appendChild(css);
+    const s1 = document.createElement("script");
+    s1.src = "https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js";
+    s1.onload = () => {
+      const s2 = document.createElement("script");
+      s2.src = "https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js";
+      s2.onload = () => setKatexReady(true);
+      document.body.appendChild(s2);
+    };
+    document.body.appendChild(s1);
+  }, []);
+
+  useEffect(() => { (async () => { setLibrary(await loadLibrary()); setMyFolders(await loadFolders()); })(); }, []);
+
+  useEffect(() => {
+    if (!katexReady || !mathRef.current || !window.renderMathInElement) return;
+    try {
+      window.renderMathInElement(mathRef.current, {
+        delimiters: [
+          { left: "$$", right: "$$", display: true },
+          { left: "\\[", right: "\\]", display: true },
+          { left: "\\(", right: "\\)", display: false },
+          { left: "$", right: "$", display: false },
+        ],
+        throwOnError: false,
+      });
+    } catch (e) {}
+  }, [katexReady, result, solution, revealed, solState, view]);
+
+  const pickFile = useCallback(async (f) => {
+    if (!f) { setDiag("파일을 받지 못했어요 (선택 취소했거나 빈 값)."); return; }
+    setDiag(`① 파일 받음: ${f.name || "이름없음"} · ${f.type || "형식미상"} · ${(f.size / 1024).toFixed(0)}KB`);
+    const isPdfFile = f.type === "application/pdf" || /\.pdf$/i.test(f.name || "");
+    if (isPdfFile) {
+      try {
+        setDiag(d => d + "  →  ② PDF 읽는 중…");
+        const b64 = await readBase64(f);
+        if (!b64) throw new Error("read");
+        setIsPdf(true); setPdfB64(b64); setPdfName(f.name || "시험지.pdf");
+        setPdfId((f.name || "pdf") + "_" + (f.size || b64.length));
+        setImgData(null); setMedia("application/pdf"); setPreview(null);
+        setResult(null); setSolution(null); setSolState("idle"); setRevealed(1);
+        setCurrentId(null); setSaved(false); setProbNum(""); setStatus("idle"); setErrMsg(""); setCurrentFolderId(null);
+        setDiag(`③ PDF 준비됨 · ${(b64.length / 1024).toFixed(0)}KB. 분석할 문제 번호를 입력하세요.`);
+      } catch (e) { setDiag(d => d + "  ✗  PDF 읽기 실패"); setErrMsg("PDF를 읽지 못했어요. 다시 시도해 주세요."); setStatus("error"); }
+      return;
+    }
+    if (!f.type.startsWith("image/")) { setErrMsg("이미지(JPG·PNG…) 또는 PDF를 올려주세요."); setStatus("error"); return; }
+    try {
+      setDiag(d => d + "  →  ② 이미지 읽는 중…");
+      const { b64, media: m, preview: p } = await processImage(f);
+      setIsPdf(false); setPdfB64(null);
+      setImgData(b64); setMedia(m); setPreview(p);
+      setResult(null); setSolution(null); setSolState("idle"); setRevealed(1);
+      setCurrentId(null); setSaved(false); setStatus("idle"); setErrMsg(""); setCurrentFolderId(null);
+      setDiag(`③ 읽기 완료 · ${m} · ${(b64.length / 1024).toFixed(0)}KB. 이제 ‘접근법 분석하기’를 누르세요.`);
+    } catch (e) {
+      const msg = String(e.message || e);
+      setDiag(d => d + `  ✗  실패: ${msg}`);
+      setErrMsg(msg.startsWith("unsupported")
+        ? "지원하지 않는 이미지 형식이에요. JPG·PNG·WebP·GIF로 올려주세요. (iPhone HEIC라면 스크린샷으로 다시 찍으면 됩니다.)"
+        : "파일을 읽지 못했어요. 다른 사진으로 다시 시도해 주세요.");
+      setStatus("error");
+    }
+  }, []);
+
+  useEffect(() => {
+    const onPaste = (e) => {
+      const items = e.clipboardData?.items; if (!items) return;
+      for (const it of items) { if (it.type && it.type.startsWith("image/")) { const f = it.getAsFile(); if (f) { pickFile(f); break; } } }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [pickFile]);
+
+  const analyze = useCallback(async () => {
+    setErrMsg("");
+    if (isPdf) {
+      if (!pdfB64) return;
+      const num = String(probNum || "").trim();
+      if (!num) { setErrMsg("분석할 문제 번호를 입력해 주세요."); setStatus("error"); return; }
+      setStatus("loading");
+      try {
+        const t = await askClaude([pdfBlock(pdfB64)], TRANSCRIBE_PDF(num));
+        if (t.found === false || !t.problemText) {
+          setErrMsg(t.message || `PDF에서 ${num}번 문제를 찾지 못했어요. 번호를 확인하거나, 그 문제를 캡처해 이미지로 올려보세요.`);
+          setStatus("error"); return;
+        }
+        const a = await askClaude([], ANALYZE_TEXT(t.problemText));
+        setResult({ ...a, problemText: t.problemText, number: num, pdfId, pdfName });
+        setRevealed(1); setCurrentId(null); setSaved(false); setStatus("done");
+      } catch (e) {
+        setErrMsg("분석 실패: " + (e.message || "알 수 없는 오류") + " — PDF 입력이 이 환경에서 막히면, 문제를 캡처해 이미지로 올려보세요.");
+        setStatus("error");
+      }
+      return;
+    }
+    if (!imgData) return;
+    setStatus("loading");
+    try {
+      const parsed = await askClaude([imgBlock(media, imgData)], ANALYZE_PROMPT);
+      if (parsed.readable === false) { setErrMsg(parsed.message || "사진 속 문제를 또렷하게 읽기 어려워요."); setStatus("error"); return; }
+      setResult(parsed); setRevealed(1); setCurrentId(null); setSaved(false); setStatus("done");
+    } catch (e) { setErrMsg("분석 실패: " + (e.message || "알 수 없는 오류") + " — 다시 시도해 주세요."); setStatus("error"); }
+  }, [imgData, media, isPdf, pdfB64, probNum, pdfId, pdfName]);
+
+  const persist = useCallback(async (id, sol) => {
+    if (!result) return;
+    const p = {
+      id, ts: Date.now(), summary: result.summary || "제목 없는 문제",
+      concepts: Array.isArray(result.concepts) ? result.concepts : [],
+      b64: imgData, media, result, solution: sol || null,
+      pdfId: result.pdfId || null, pdfName: result.pdfName || null, number: result.number || null,
+      folderId: currentFolderId || null,
+    };
+    await saveProblem(p);
+    if (result.pdfId && pdfB64) await savePdfBlob(result.pdfId, pdfB64);
+    setLibrary(await loadLibrary());
+  }, [result, imgData, media, pdfB64, currentFolderId]);
+
+  const fetchSolution = useCallback(async () => {
+    if (solState === "loading") return;
+    const ptext = result && result.problemText;
+    if (!ptext && !imgData) return;
+    setSolState("loading");
+    try {
+      const parsed = ptext
+        ? await askClaude([], SOLVE_TEXT(ptext))
+        : await askClaude([imgBlock(media, imgData)], SOLVE_PROMPT);
+      setSolution(parsed); setSolState("done");
+      if (saved && currentId) { try { await persist(currentId, parsed); } catch (e) {} }
+    } catch (e) { setSolState("error"); }
+  }, [imgData, media, result, solState, saved, currentId, persist]);
+
+  const saveCurrent = useCallback(async () => {
+    if (!result) return;
+    const id = currentId || ("p" + Date.now());
+    setCurrentId(id); setSaved(true);
+    try { await persist(id, solution); } catch (e) {}
+  }, [result, currentId, solution, persist]);
+
+  const openSaved = (p) => {
+    setResult(p.result || null); setSolution(p.solution || null);
+    setSolState(p.solution ? "done" : "idle");
+    setImgData(p.b64 || null); setMedia(p.media || null);
+    setPreview(mgImgUrl(p));
+    setIsPdf(false); setPdfB64(null); setProbNum(p.result?.number || "");
+    setPdfId(p.pdfId || p.result?.pdfId || null); setPdfName(p.pdfName || p.result?.pdfName || "");
+    setCurrentFolderId(p.folderId || null);
+    setRevealed(Array.isArray(p.result?.approach) ? p.result.approach.length : 1);
+    setCurrentId(p.id); setSaved(true); setStatus("done"); setErrMsg(""); setDiag("");
+    setView("analyze"); window.scrollTo(0, 0);
+  };
+
+  const removeSaved = async (id, e) => {
+    if (e) e.stopPropagation();
+    const item = library.find(p => p.id === id);
+    try {
+      await deleteProblem(id);
+      const rest = await loadLibrary();
+      setLibrary(rest);
+      const pid = item && (item.pdfId || (item.result && item.result.pdfId));
+      if (pid && !rest.some(p => (p.pdfId || (p.result && p.result.pdfId)) === pid)) await deletePdfBlob(pid);
+      if (id === currentId) setSaved(false);
+    } catch (er) {}
+  };
+
+  const analyzeMoreFromPdf = async (pid, pname) => {
+    const b64 = await loadPdfBlob(pid);
+    if (!b64) { setLibMsg("이 PDF 원본은 저장돼 있지 않아요(용량이 커서 제외됐을 수 있어요). 같은 PDF를 다시 올려 주세요."); return; }
+    reset();
+    setIsPdf(true); setPdfB64(b64); setPdfId(pid); setPdfName(pname || "시험지.pdf"); setProbNum("");
+    setView("analyze"); window.scrollTo(0, 0);
+  };
+
+  const refreshAll = async () => { setLibrary(await loadLibrary()); setMyFolders(await loadFolders()); };
+  const openNewFolder = (move) => { setPendingMove(!!move); setNewFolderName(""); setShowNewFolder(true); };
+  const submitNewFolder = async () => {
+    const name = newFolderName.trim();
+    if (!name) { setShowNewFolder(false); return; }
+    const f = { id: "f" + Date.now(), name, ts: Date.now() };
+    try { await saveFolder(f); } catch (e) {}
+    setMyFolders(await loadFolders());
+    if (pendingMove && selectedIds.length) await moveToFolder(selectedIds, f.id);
+    setShowNewFolder(false); setNewFolderName(""); setPendingMove(false);
+  };
+  const startRename = (id, name, e) => { if (e) e.stopPropagation(); setConfirmDelId(null); setEditingFolderId(id); setEditName(name); };
+  const submitRename = async () => {
+    const cur = myFolders.find(f => f.id === editingFolderId); const name = editName.trim();
+    if (cur && name) { try { await saveFolder({ ...cur, name }); } catch (e) {} setMyFolders(await loadFolders()); }
+    setEditingFolderId(null); setEditName("");
+  };
+  const confirmDelete = async (id) => {
+    for (const p of library.filter(x => x.folderId === id)) { try { await saveProblem({ ...p, folderId: null }); } catch (er) {} }
+    try { await deleteFolderKey(id); } catch (er) {}
+    if (openMyFolder === id) setOpenMyFolder(null);
+    setConfirmDelId(null);
+    await refreshAll();
+  };
+  const moveToFolder = async (ids, folderId) => {
+    for (const id of ids) { const p = library.find(x => x.id === id); if (p) { try { await saveProblem({ ...p, folderId }); } catch (e) {} } }
+    setSelectedIds([]); setSelecting(false);
+    await refreshAll();
+  };
+  const toggleSelect = (id) => setSelectedIds(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
+
+  const backfillIntent = async () => {
+    const todo = library.filter(p => p.result && !p.result.intent);
+    if (!todo.length) { setLibMsg("모든 문제에 이미 출제 의도가 정리돼 있어요."); return; }
+    setBackfilling(true);
+    let done = 0, ok = 0;
+    for (const it of todo) {
+      setBackfillMsg(`정리 중… ${done}/${todo.length}`);
+      try {
+        let intent = "";
+        if (it.result.problemText) intent = (await askClaude([], INTENT_TEXT(it.result.problemText))).intent;
+        else if (it.b64) intent = (await askClaude([imgBlock(it.media, it.b64)], INTENT_IMG)).intent;
+        if (intent) { await saveProblem({ ...it, result: { ...it.result, intent } }); ok++; }
+      } catch (e) {}
+      done++;
+    }
+    setBackfilling(false); setBackfillMsg("");
+    await refreshAll();
+    setLibMsg(`출제 의도 정리 완료 — ${ok}/${todo.length}개 채웠어요.`);
+  };
+
+  const exportBackup = async () => {
+    const all = {};
+    for (const pfx of ["prob:", "folder:", "pdf:"]) {
+      const l = await window.storage.list(pfx);
+      for (const k of ((l && l.keys) || [])) {
+        try { const r = await window.storage.get(k); if (r && r.value != null) all[k] = r.value; } catch (e) {}
+      }
+    }
+    setBackupText(JSON.stringify(all));
+    setLibMsg("아래 백업 칸의 내용을 전체 복사해서, HTML 버전 ⚙ '가져오기'에 붙여넣으세요.");
+  };
+
+  const openCfg = () => {
+    setCfgUrl(localStorage.getItem("mg_sheet_url") || "");
+    setCfgKey(localStorage.getItem("mg_api_key") || "");
+    setCfgImport(""); setCfgMsg(""); setShowCfg(true);
+  };
+  const cfgSave = () => {
+    localStorage.setItem("mg_sheet_url", (cfgUrl || "").trim());
+    localStorage.setItem("mg_api_key", (cfgKey || "").trim());
+    setCfgMsg("저장됨 ✓");
+  };
+  const cfgSync = async () => {
+    localStorage.setItem("mg_sheet_url", (cfgUrl || "").trim());
+    localStorage.setItem("mg_api_key", (cfgKey || "").trim());
+    setCfgMsg("동기화 중…");
+    try { if (window.__mgPull) await window.__mgPull(); } catch (e) {}
+    location.reload();
+  };
+  const cfgDoImport = async () => {
+    const raw = (cfgImport || "").trim();
+    if (!raw) { setCfgMsg("붙여넣은 내용이 없어요"); return; }
+    let obj; try { obj = JSON.parse(raw); } catch (e) { setCfgMsg("JSON 형식 오류 — 전체를 복사했는지 확인하세요"); return; }
+    const keys = Object.keys(obj); if (!keys.length) { setCfgMsg("내용이 비어 있어요"); return; }
+    for (const k of keys) { try { await window.storage.set(k, obj[k]); } catch (e) {} }
+    setCfgMsg(keys.length + "개 가져옴 — 새로고침합니다");
+    setTimeout(() => location.reload(), 800);
+  };
+  const cfgPushImages = async () => {
+    setCfgMsg("이미지 압축·업로드 중…");
+    const l = await window.storage.list("prob:"); let n = 0;
+    for (const k of ((l && l.keys) || [])) {
+      try { const r = await window.storage.get(k); if (r && r.value) { const o = JSON.parse(r.value); if (o.b64) { await window.storage.set(k, r.value); n++; } } } catch (e) {}
+    }
+    setCfgMsg(n + "개 이미지 시트에 업로드(압축). 다른 기기에서 ⚙ 동기화하세요.");
+  };
+
+  const exportHTML = () => {
+    try {
+      const blob = new Blob([buildExportHTML(library)], { type: "text/html" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = "수학길잡이_보관함.html";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    } catch (e) { setLibMsg("내보내기에 실패했어요. 미리보기 환경에서는 다운로드가 막힐 수 있습니다."); }
+  };
+
+  const reset = () => {
+    setPreview(null); setImgData(null); setMedia(null); setResult(null);
+    setSolution(null); setSolState("idle"); setRevealed(1); setStatus("idle");
+    setErrMsg(""); setDiag(""); setCurrentId(null); setSaved(false);
+    setIsPdf(false); setPdfB64(null); setPdfName(""); setProbNum(""); setCurrentFolderId(null);
+    if (inputRef.current) inputRef.current.value = "";
+  };
+
+  const approach = Array.isArray(result?.approach) ? result.approach : [];
+  const units = Array.from(new Set(library.flatMap(p => p.concepts || [])));
+  const filtered = activeUnit === "__all" ? library : library.filter(p => (p.concepts || []).includes(activeUnit));
+  const pidOf = (p) => p.pdfId || (p.result && p.result.pdfId) || null;
+  const pnameOf = (p) => p.pdfName || (p.result && p.result.pdfName) || "PDF";
+  const numOf = (p) => p.number || (p.result && p.result.number) || null;
+  const folderMap = {};
+  library.forEach(p => { const id = pidOf(p); if (id) { (folderMap[id] = folderMap[id] || { id, name: pnameOf(p), items: [] }).items.push(p); } });
+  const folders = Object.values(folderMap).sort((a, b) => b.items.length - a.items.length);
+  const loose = library.filter(p => !pidOf(p));
+  const folderItems = openFolder ? (folderMap[openFolder] ? folderMap[openFolder].items : []) : [];
+
+  const myFolderItems = openMyFolder ? library.filter(p => p.folderId === openMyFolder) : [];
+  const uncategorized = library.filter(p => !p.folderId);
+  const missingIntent = library.filter(p => p.result && !p.result.intent).length;
+
+  const cardEl = (p, opt = {}) => {
+    const sel = selectedIds.includes(p.id);
+    const imgSrc = mgImgUrl(p);
+    return (
+      <div key={p.id} className="mg-card mg-btn"
+        draggable={!!opt.draggable}
+        onDragStart={opt.draggable ? (e) => { e.dataTransfer.setData("text/plain", p.id); e.dataTransfer.effectAllowed = "move"; } : undefined}
+        onClick={() => (opt.selecting ? toggleSelect(p.id) : openSaved(p))}
+        style={{ background: C.card, border: `2px solid ${sel ? C.clay : C.line}`, borderRadius: 15, padding: 13, cursor: "pointer", position: "relative" }}>
+        <div style={{ borderRadius: 10, overflow: "hidden", border: `1px solid ${C.line}`, height: 120, background: C.paper }}>
+          {imgSrc
+            ? <img src={imgSrc} loading="lazy" alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            : <div style={{ height: "100%", padding: "12px 13px", display: "flex", flexDirection: "column", gap: 4, overflow: "hidden" }}>
+                <span className="mg-eyebrow" style={{ fontSize: 10.5, color: C.clay, fontWeight: 700 }}>{numOf(p) ? `${numOf(p)}번 · PDF` : "PDF"}</span>
+                <span style={{ fontSize: 12, color: C.muted, lineHeight: 1.45, display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{String(p.result?.problemText || "").replace(/\$/g, "")}</span>
+              </div>}
+        </div>
+        <div className="mg-serif" style={{ fontSize: 14.5, fontWeight: 700, marginTop: 11, lineHeight: 1.45, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+          {String(p.summary || "문제").replace(/\$/g, "")}
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 9 }}>
+          {(p.concepts || []).slice(0, 3).map((c, i) => <span key={i} style={{ fontSize: 11.5, fontWeight: 700, color: C.clay, background: C.claySoft, padding: "3px 9px", borderRadius: 999 }}>{c}</span>)}
+        </div>
+        {p.solution && <span style={{ fontSize: 11, color: C.green, fontWeight: 700, marginTop: 9, display: "inline-block" }}>✓ 풀이 포함</span>}
+        {opt.selecting
+          ? <span style={{ position: "absolute", top: 9, right: 9, width: 26, height: 26, borderRadius: 999, border: `2px solid ${sel ? C.clay : C.muted}`, background: sel ? C.clay : "rgba(255,255,255,.85)", color: "#fff", fontSize: 14, lineHeight: "22px", textAlign: "center", fontWeight: 700 }}>{sel ? "✓" : ""}</span>
+          : <button className="mg-btn" onClick={(e) => removeSaved(p.id, e)} title="삭제"
+              style={{ position: "absolute", top: 9, right: 9, width: 26, height: 26, borderRadius: 8, border: "none", background: "rgba(50,43,33,.5)", color: "#fff", fontSize: 14, lineHeight: 1, fontFamily: "inherit" }}>×</button>}
+      </div>
+    );
+  };
+  const gridStyle = { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 15 };
+  const moveChip = { border: "none", borderRadius: 8, padding: "7px 12px", background: C.paper, color: C.ink, fontSize: 12.5, fontWeight: 700, fontFamily: "inherit" };
+  const moveBar = () => (!selecting ? null : (
+    <div style={{ position: "sticky", bottom: 12, zIndex: 5, background: C.ink, color: C.paper, borderRadius: 13, padding: "11px 13px", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 16, boxShadow: "0 12px 32px -14px rgba(0,0,0,.55)" }}>
+      <span style={{ fontSize: 13.5, fontWeight: 700 }}>{selectedIds.length}개 선택</span>
+      <span style={{ fontSize: 12, opacity: .75 }}>이동 →</span>
+      {myFolders.map(f => <button key={f.id} className="mg-btn" disabled={!selectedIds.length} onClick={() => moveToFolder(selectedIds, f.id)} style={moveChip}>{f.name}</button>)}
+      <button className="mg-btn" disabled={!selectedIds.length} onClick={() => openNewFolder(true)} style={{ ...moveChip, background: C.claySoft, color: C.clay }}>＋ 새 폴더로</button>
+      <button className="mg-btn" disabled={!selectedIds.length} onClick={() => moveToFolder(selectedIds, null)} style={moveChip}>미분류로</button>
+      <button className="mg-btn" onClick={() => { setSelecting(false); setSelectedIds([]); }} style={{ ...moveChip, background: "transparent", color: C.paper, marginLeft: "auto" }}>취소</button>
+    </div>
+  ));
+  const myFolderCard = (f) => {
+    const count = library.filter(p => p.folderId === f.id).length;
+    const editing = editingFolderId === f.id;
+    const confirming = confirmDelId === f.id;
+    const iconBtn = { width: 24, height: 24, borderRadius: 6, border: `1px solid ${C.line}`, background: C.paper, fontSize: 12, fontFamily: "inherit", lineHeight: 1 };
+    return (
+      <div key={f.id} className="mg-card mg-btn" onClick={() => { if (!editing && !confirming) setOpenMyFolder(f.id); }}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => { e.preventDefault(); const id = e.dataTransfer.getData("text/plain"); if (id) moveToFolder([id], f.id); }}
+        style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 15, padding: 16, cursor: "pointer", position: "relative" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 26 }}>📁</span>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            {editing
+              ? <input autoFocus value={editName} onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => setEditName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") submitRename(); if (e.key === "Escape") { setEditingFolderId(null); setEditName(""); } }}
+                  style={{ width: "100%", border: `1px solid ${C.clay}`, borderRadius: 8, padding: "6px 9px", fontSize: 14.5, fontFamily: "inherit", background: C.paper, color: C.ink }} />
+              : <div className="mg-serif" style={{ fontSize: 15.5, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.name}</div>}
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{count}문제</div>
+          </div>
+        </div>
+        <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 4 }} onClick={(e) => e.stopPropagation()}>
+          {confirming ? (<>
+            <span style={{ fontSize: 11.5, color: C.warn, alignSelf: "center", fontWeight: 700 }}>삭제?</span>
+            <button className="mg-btn" onClick={() => confirmDelete(f.id)} style={{ ...iconBtn, width: "auto", padding: "0 8px", color: C.warn, fontWeight: 700 }}>예</button>
+            <button className="mg-btn" onClick={() => setConfirmDelId(null)} style={{ ...iconBtn, width: "auto", padding: "0 8px" }}>취소</button>
+          </>) : editing ? (
+            <button className="mg-btn" onClick={submitRename} style={{ ...iconBtn, color: C.clay, fontWeight: 700 }}>✓</button>
+          ) : (<>
+            <button className="mg-btn" onClick={(e) => startRename(f.id, f.name, e)} title="이름 변경" style={iconBtn}>✎</button>
+            <button className="mg-btn" onClick={(e) => { e.stopPropagation(); setEditingFolderId(null); setConfirmDelId(f.id); }} title="폴더 삭제" style={{ ...iconBtn, fontSize: 14 }}>×</button>
+          </>)}
+        </div>
+      </div>
+    );
+  };
+
+  const tabBtn = (active, onClick, children) => (
+    <button className="mg-btn" onClick={onClick} style={{
+      border: `1px solid ${active ? C.ink : C.line}`, background: active ? C.ink : C.card,
+      color: active ? C.paper : C.ink, borderRadius: 999, padding: "7px 15px", fontSize: 13.5,
+      fontWeight: active ? 700 : 400, whiteSpace: "nowrap", fontFamily: "inherit", flexShrink: 0,
+    }}>{children}</button>
+  );
+  const headTab = (active, onClick, children) => (
+    <button className="mg-btn" onClick={onClick} style={{
+      border: `1.5px solid ${C.amber}`,
+      background: active ? C.amber : "transparent",
+      color: active ? "#1c1409" : C.amber, borderRadius: 999, padding: "10px 20px", fontSize: 15,
+      fontWeight: 700, whiteSpace: "nowrap", fontFamily: "inherit", flexShrink: 0,
+    }}>{children}</button>
+  );
+  const heroStyle = {
+    position: "relative", overflow: "hidden", borderRadius: 22, padding: "30px 26px 26px",
+    background: "linear-gradient(150deg, #241d15 0%, #16110b 55%, #201810 100%)",
+    border: "1px solid #3a2f22", boxShadow: "0 24px 54px -30px rgba(20,14,8,.9)", marginBottom: 26,
+  };
+  const cfgLbl = { fontSize: 13, color: C.muted, fontWeight: 700, display: "block", margin: "12px 0 5px" };
+  const cfgHint = { fontWeight: 400, color: C.muted, opacity: .8 };
+  const cfgInp = { width: "100%", border: `1px solid ${C.line}`, borderRadius: 9, padding: "10px 12px", fontSize: 14, fontFamily: "inherit", background: C.paper, color: C.ink, boxSizing: "border-box" };
+  const cfgGold = { border: "none", borderRadius: 10, padding: "10px 16px", background: C.clay, color: "#fff", fontSize: 14, fontWeight: 700, fontFamily: "inherit" };
+  const cfgOut = { border: `1px solid ${C.line}`, borderRadius: 10, padding: "10px 16px", background: C.card, color: C.ink, fontSize: 14, fontWeight: 700, fontFamily: "inherit" };
+  const titleRow = (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: `linear-gradient(90deg, transparent, ${C.amber}, transparent)`, opacity: .85 }} />
+      <h1 className="mg-serif" style={{ margin: 0, fontWeight: 700, letterSpacing: "-.01em", lineHeight: 1.25, color: "#f6efe0" }}>
+        <span style={{ fontSize: 40 }}>수학</span>
+        <span style={{ fontSize: 19, color: C.amber, fontWeight: 400 }}>, 그에 대한 깊은 고찰</span>
+      </h1>
+      <div style={{ display: "flex", gap: 9 }}>
+        {headTab(view === "analyze", () => setView("analyze"), "분석")}
+        {headTab(view === "library", () => setView("library"), `보관함 ${library.length}`)}
+        {IS_HTML && (
+          <button className="mg-btn" onClick={openCfg} title="설정 · 동기화 · 가져오기"
+            style={{ border: `1.5px solid ${C.amber}`, background: "transparent", color: C.amber, borderRadius: 999, padding: "10px 14px", fontSize: 15, fontWeight: 700, fontFamily: "inherit", flexShrink: 0 }}>⚙</button>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="mg-root">
+      <style>{STYLES}</style>
+      <div style={{ maxWidth: 860, margin: "0 auto", padding: "40px 20px 90px" }}>
+
+        {showCfg && (
+          <div onClick={() => setShowCfg(false)} style={{ position: "fixed", inset: 0, background: "rgba(10,8,4,.6)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "36px 16px", overflowY: "auto" }}>
+            <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 560, background: C.card, border: `1px solid ${C.line}`, borderRadius: 16, padding: 22, boxShadow: "0 30px 60px -20px rgba(0,0,0,.5)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <h2 className="mg-serif" style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>설정 · 동기화 · 가져오기</h2>
+                <button className="mg-btn" onClick={() => setShowCfg(false)} style={{ border: "none", background: "transparent", fontSize: 22, color: C.muted, fontFamily: "inherit", lineHeight: 1 }}>×</button>
+              </div>
+              <label style={cfgLbl}>구글 시트 Web App URL <span style={cfgHint}>(기기 동기화용 · /exec)</span></label>
+              <input value={cfgUrl} onChange={(e) => setCfgUrl(e.target.value)} placeholder="https://script.google.com/macros/s/..../exec" style={cfgInp} />
+              <label style={cfgLbl}>Anthropic API 키 <span style={cfgHint}>(HTML에서 직접 분석할 때만 · 유료)</span></label>
+              <input type="password" value={cfgKey} onChange={(e) => setCfgKey(e.target.value)} placeholder="sk-ant-... (비우면 분석은 아티팩트에서 무료로)" style={cfgInp} />
+              <div style={{ display: "flex", gap: 8, margin: "14px 0 18px", flexWrap: "wrap" }}>
+                <button className="mg-btn" onClick={cfgSave} style={cfgGold}>저장</button>
+                <button className="mg-btn" onClick={cfgSync} style={cfgOut}>↻ 동기화 (새로고침)</button>
+                <button className="mg-btn" onClick={cfgPushImages} style={cfgOut}>🖼 이미지 시트에 올리기</button>
+              </div>
+              <div style={{ borderTop: `1px dashed ${C.line}`, paddingTop: 14 }}>
+                <label style={{ ...cfgLbl, marginTop: 0 }}>가져오기 (보관함 복원) <span style={cfgHint}>아티팩트 ‘📦 기기 이전 백업’에서 복사한 내용을 붙여넣기</span></label>
+                <textarea value={cfgImport} onChange={(e) => setCfgImport(e.target.value)} placeholder={'{"prob:...":"...","folder:...":"..."}'} style={{ ...cfgInp, height: 96, fontFamily: "ui-monospace, monospace", fontSize: 12, resize: "vertical" }} />
+                <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
+                  <button className="mg-btn" onClick={cfgDoImport} style={cfgGold}>가져오기</button>
+                  {cfgMsg && <span style={{ fontSize: 13, color: C.green, fontWeight: 700 }}>{cfgMsg}</span>}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {view === "analyze" && (
+          <div ref={mathRef}>
+          <div style={heroStyle}>
+            {titleRow}
+            <section style={{ marginTop: 22, background: C.card, border: `1px solid ${C.line}`, borderRadius: 18, padding: 22, boxShadow: "0 14px 34px -24px rgba(0,0,0,.5)" }}>
+            {preview ? (
+              <div>
+                <div style={{ borderRadius: 13, overflow: "hidden", border: `1px solid ${C.line}` }}>
+                  <img src={preview} alt="업로드한 수학 문제" style={{ width: "100%", display: "block", maxHeight: 360, objectFit: "contain", background: C.card }} />
+                </div>
+                <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+                  <button className="mg-btn" onClick={analyze} disabled={status === "loading"}
+                    style={{ flex: "1 1 200px", border: "none", borderRadius: 11, padding: "14px 18px", background: C.ink, color: C.paper, fontSize: 15, fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 9, fontFamily: "inherit" }}>
+                    {status === "loading"
+                      ? <><span className="mg-spin" style={{ width: 15, height: 15, border: `2px solid ${C.paper}`, borderTopColor: "transparent", borderRadius: "50%", display: "inline-block" }} /> 길을 찾는 중…</>
+                      : (result ? "다시 분석하기" : "접근법 분석하기")}
+                  </button>
+                  <button className="mg-btn" onClick={reset} disabled={status === "loading"}
+                    style={{ border: `1px solid ${C.line}`, borderRadius: 11, padding: "14px 18px", background: C.card, color: C.ink, fontSize: 15, fontWeight: 400, fontFamily: "inherit" }}>다른 문제</button>
+                </div>
+              </div>
+            ) : pdfB64 ? (
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, border: `1px solid ${C.line}`, borderRadius: 13, padding: "16px 18px", background: C.paper }}>
+                  <div className="mg-serif" style={{ fontSize: 26 }}>📄</div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 14.5, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{pdfName}</div>
+                    <div style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>시험지 PDF · 분석할 문제 번호를 입력하세요</div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap", alignItems: "stretch" }}>
+                  <input value={probNum} onChange={(e) => setProbNum(e.target.value)} inputMode="numeric"
+                    onKeyDown={(e) => { if (e.key === "Enter") analyze(); }}
+                    placeholder="문제 번호 (예: 21)"
+                    style={{ flex: "0 0 130px", border: `1px solid ${C.line}`, borderRadius: 11, padding: "13px 15px", fontSize: 15, fontFamily: "inherit", background: C.card, color: C.ink }} />
+                  <button className="mg-btn" onClick={analyze} disabled={status === "loading"}
+                    style={{ flex: "1 1 160px", border: "none", borderRadius: 11, padding: "14px 18px", background: C.ink, color: C.paper, fontSize: 15, fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 9, fontFamily: "inherit" }}>
+                    {status === "loading"
+                      ? <><span className="mg-spin" style={{ width: 15, height: 15, border: `2px solid ${C.paper}`, borderTopColor: "transparent", borderRadius: "50%", display: "inline-block" }} /> 문제 찾는 중…</>
+                      : "이 문제 분석하기"}
+                  </button>
+                  <button className="mg-btn" onClick={reset} disabled={status === "loading"}
+                    style={{ border: `1px solid ${C.line}`, borderRadius: 11, padding: "14px 18px", background: C.card, color: C.ink, fontSize: 15, fontWeight: 400, fontFamily: "inherit" }}>다른 파일</button>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div className={`mg-drop${drag ? " drag" : ""}`}
+                  onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+                  onDragLeave={() => setDrag(false)}
+                  onDrop={(e) => { e.preventDefault(); setDrag(false); pickFile(e.dataTransfer.files?.[0]); }}
+                  style={{ position: "relative", border: `2px dashed ${C.line}`, borderRadius: 13, padding: "44px 24px", textAlign: "center", background: C.paper, transition: "border-color .18s, background .18s" }}>
+                  <div className="mg-serif" style={{ fontSize: 30, color: C.clay, marginBottom: 12, fontWeight: 700 }}>＋</div>
+                  <div style={{ fontSize: 16, fontWeight: 700 }}>사진 또는 PDF 올리기</div>
+                  <div style={{ fontSize: 13.5, color: C.muted, marginTop: 7 }}>탭해서 선택 · 끌어다 놓기 · 붙여넣기 · 시험지 PDF도 가능</div>
+                  <input ref={inputRef} type="file" accept="image/*,application/pdf" onChange={(e) => pickFile(e.target.files?.[0])}
+                    style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", opacity: 0, fontSize: 0, cursor: "pointer" }} aria-label="사진 또는 PDF 선택" />
+                </div>
+                <div className="mg-btn" style={{ position: "relative", marginTop: 10, border: `1px solid ${C.clay}`, borderRadius: 11, padding: "13px 18px", background: C.claySoft, color: C.clay, fontSize: 15, fontWeight: 700, textAlign: "center" }}>
+                  <span style={{ fontSize: 17 }}>📷</span> 카메라로 촬영
+                  <input type="file" accept="image/*" capture="environment" onChange={(e) => pickFile(e.target.files?.[0])}
+                    style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", opacity: 0, fontSize: 0, cursor: "pointer" }} aria-label="카메라로 촬영" />
+                </div>
+                <div style={{ marginTop: 15, paddingTop: 15, borderTop: `1px dashed ${C.line}` }}>
+                  <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 8 }}>위가 안 되면 ↓ 기본 선택칸을 직접 눌러보세요</div>
+                  <input type="file" accept="image/*,application/pdf" onChange={(e) => pickFile(e.target.files?.[0])} style={{ fontSize: 14, color: C.ink }} />
+                </div>
+              </div>
+            )}
+            </section>
+
+            {status === "done" && result && result.problemText && (
+              <section style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 15, padding: "18px 21px", marginTop: 16 }}>
+                <Eyebrow>{result.number ? `${result.number}번 문제` : "문제"}</Eyebrow>
+                <div className="mg-serif" style={{ fontSize: 16, lineHeight: 1.7, marginTop: 9, whiteSpace: "pre-wrap" }}>{result.problemText}</div>
+              </section>
+            )}
+            {status === "done" && result && result.summary && (
+              <section style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 15, padding: "18px 21px", marginTop: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                  <div>
+                    <Eyebrow>이 문제는</Eyebrow>
+                    <p className="mg-serif" style={{ fontSize: 21, lineHeight: 1.5, margin: "9px 0 0", fontWeight: 400 }}>{result.summary}</p>
+                  </div>
+                  <button className="mg-btn" onClick={saveCurrent} disabled={saved}
+                    style={{ flexShrink: 0, border: `1px solid ${saved ? C.line : C.clay}`, borderRadius: 10, padding: "9px 14px", background: saved ? C.paper : C.claySoft, color: saved ? C.muted : C.clay, fontSize: 13.5, fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                    {saved ? "✓ 보관됨" : "＋ 보관함에 저장"}
+                  </button>
+                </div>
+                {Array.isArray(result.concepts) && result.concepts.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 15 }}>
+                    {result.concepts.map((c, i) => <span key={i} style={{ fontSize: 13, fontWeight: 700, color: C.clay, background: C.claySoft, padding: "5px 12px", borderRadius: 999 }}>{c}</span>)}
+                  </div>
+                )}
+              </section>
+            )}
+          </div>
+
+          {diag && <div className="mg-mono" style={{ marginTop: 12, background: C.card, border: `1px solid ${C.line}`, borderRadius: 11, padding: "10px 13px", fontSize: 12, color: C.muted, lineHeight: 1.5, wordBreak: "break-all" }}>{diag}</div>}
+          {status === "error" && <div className="mg-reveal" style={{ marginTop: 16, background: C.warnSoft, border: `1px solid ${C.warn}44`, borderRadius: 13, padding: "14px 16px", color: C.warn, fontSize: 14.5, lineHeight: 1.55 }}>{errMsg}</div>}
+
+          {status === "done" && result && (
+            <div className="mg-reveal" style={{ marginTop: 26 }}>
+              {result.intent && (
+                <Block title="출제 의도" hint="이 문제로 무엇을 확인하려는가">
+                  <div style={{ fontSize: 15, lineHeight: 1.7, color: C.ink }}>{result.intent}</div>
+                </Block>
+              )}
+
+              {Array.isArray(result.keyTerms) && result.keyTerms.length > 0 && (
+                <Block title="핵심 단어 짚기" hint="문제가 흘려놓은 신호들">
+                  {result.keyTerms.map((t, i) => (
+                    <div key={i} style={{ padding: "14px 0", borderTop: i ? `1px solid ${C.line}` : "none" }}>
+                      <div style={{ fontSize: 16.5 }}><span className="mg-hl">{t.term}</span></div>
+                      <div style={{ fontSize: 14.5, color: C.muted, marginTop: 7, lineHeight: 1.6 }}>{t.signal}</div>
+                    </div>
+                  ))}
+                </Block>
+              )}
+
+              {approach.length > 0 && (
+                <Block title="접근 경로" hint="막힐 때마다 하나씩 열어보세요">
+                  {approach.slice(0, revealed).map((a, i) => (
+                    <div key={i} className="mg-reveal" style={{ display: "flex", gap: 14, padding: "13px 0", borderTop: i ? `1px solid ${C.line}` : "none" }}>
+                      <div className="mg-mono" style={{ flexShrink: 0, width: 30, height: 30, borderRadius: 9, background: C.clay, color: C.paper, fontSize: 14, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{i + 1}</div>
+                      <div style={{ paddingTop: 2 }}>
+                        <div style={{ fontSize: 15.5, fontWeight: 700, lineHeight: 1.5 }}>{a.step}</div>
+                        {a.why && <div style={{ fontSize: 13.5, color: C.muted, marginTop: 5, lineHeight: 1.55 }}>{a.why}</div>}
+                      </div>
+                    </div>
+                  ))}
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14 }}>
+                    {revealed < approach.length ? (<>
+                      <button className="mg-btn" onClick={() => setRevealed(r => r + 1)}
+                        style={{ border: `1px solid ${C.clay}`, borderRadius: 10, padding: "10px 16px", background: C.claySoft, color: C.clay, fontSize: 14.5, fontWeight: 700, fontFamily: "inherit" }}>다음 힌트 보기</button>
+                      <span className="mg-mono" style={{ fontSize: 13, color: C.muted }}>{revealed} / {approach.length}</span>
+                    </>) : <span style={{ fontSize: 13, color: C.muted }}>힌트를 모두 봤어요. 이제 직접 계산해 보세요.</span>}
+                  </div>
+                </Block>
+              )}
+
+              {Array.isArray(result.watchOut) && result.watchOut.length > 0 && (
+                <Block title="놓치기 쉬운 것" hint="여기서 자주 미끄러져요">
+                  {result.watchOut.map((w, i) => (
+                    <div key={i} style={{ display: "flex", gap: 10, padding: "9px 0", borderTop: i ? `1px solid ${C.line}` : "none", fontSize: 14.5, lineHeight: 1.55 }}>
+                      <span style={{ color: C.warn, fontWeight: 700 }}>!</span><span>{w}</span>
+                    </div>
+                  ))}
+                </Block>
+              )}
+
+              <section style={{ background: solution ? C.card : C.greenSoft, border: `1px solid ${solution ? C.line : C.green + "55"}`, borderRadius: 16, padding: "20px 22px", marginTop: 16 }}>
+                {!solution && solState !== "done" ? (
+                  <div style={{ textAlign: "center" }}>
+                    <div className="mg-serif" style={{ fontSize: 16, fontWeight: 700, marginBottom: 5 }}>충분히 시도해 봤나요?</div>
+                    <div style={{ fontSize: 13.5, color: C.muted, marginBottom: 15 }}>스스로 풀어본 뒤에 확인하는 걸 권해요.</div>
+                    <button className="mg-btn" onClick={fetchSolution} disabled={solState === "loading"}
+                      style={{ border: "none", borderRadius: 11, padding: "12px 22px", background: C.green, color: "#fff", fontSize: 14.5, fontWeight: 700, fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 9 }}>
+                      {solState === "loading"
+                        ? <><span className="mg-spin" style={{ width: 14, height: 14, border: "2px solid #fff", borderTopColor: "transparent", borderRadius: "50%", display: "inline-block" }} /> 풀이 작성 중…</>
+                        : "최종 풀이 과정 보기"}
+                    </button>
+                    {solState === "error" && <div style={{ color: C.warn, fontSize: 13.5, marginTop: 10 }}>풀이를 불러오지 못했어요. 다시 눌러주세요.</div>}
+                  </div>
+                ) : (
+                  <div className="mg-reveal">
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 12 }}>
+                      <h2 className="mg-serif" style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>최종 풀이 과정</h2>
+                      <span style={{ fontSize: 12.5, color: C.muted }}>단계별 전체 풀이</span>
+                    </div>
+                    {Array.isArray(solution.steps) && solution.steps.map((s, i) => (
+                      <div key={i} style={{ display: "flex", gap: 14, padding: "13px 0", borderTop: i ? `1px solid ${C.line}` : "none" }}>
+                        <div className="mg-mono" style={{ flexShrink: 0, width: 30, height: 30, borderRadius: 9, background: C.green, color: "#fff", fontSize: 14, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{i + 1}</div>
+                        <div style={{ paddingTop: 2 }}>
+                          {s.title && <div style={{ fontSize: 15.5, fontWeight: 700, lineHeight: 1.5 }}>{s.title}</div>}
+                          {s.detail && <div style={{ fontSize: 14.5, color: C.ink, marginTop: 5, lineHeight: 1.65 }}>{s.detail}</div>}
+                        </div>
+                      </div>
+                    ))}
+                    {solution.finalAnswer && (
+                      <div style={{ marginTop: 14, background: C.greenSoft, borderRadius: 11, padding: "14px 16px" }}>
+                        <Eyebrow color={C.green}>최종 답</Eyebrow>
+                        <div className="mg-serif" style={{ fontSize: 18, fontWeight: 700, marginTop: 6 }}>{solution.finalAnswer}</div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+            </div>
+          )}
+          </div>
+        )}
+
+        {view === "library" && (
+          <>
+          <div style={heroStyle}>{titleRow}</div>
+          <div className="mg-reveal">
+            {showNewFolder && (
+              <div style={{ display: "flex", gap: 8, marginBottom: 14, alignItems: "center", background: C.card, border: `1px solid ${C.clay}`, borderRadius: 12, padding: "12px 14px", flexWrap: "wrap" }}>
+                <span className="mg-serif" style={{ fontSize: 14, fontWeight: 700 }}>새 폴더</span>
+                <input autoFocus value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") submitNewFolder(); if (e.key === "Escape") { setShowNewFolder(false); setNewFolderName(""); setPendingMove(false); } }}
+                  placeholder="폴더 이름" style={{ flex: "1 1 160px", border: `1px solid ${C.line}`, borderRadius: 9, padding: "9px 12px", fontSize: 14, fontFamily: "inherit", background: C.paper, color: C.ink }} />
+                <button className="mg-btn" onClick={submitNewFolder} style={{ border: "none", borderRadius: 9, padding: "9px 16px", background: C.clay, color: "#fff", fontSize: 13.5, fontWeight: 700, fontFamily: "inherit" }}>만들기</button>
+                <button className="mg-btn" onClick={() => { setShowNewFolder(false); setNewFolderName(""); setPendingMove(false); }} style={{ border: `1px solid ${C.line}`, borderRadius: 9, padding: "9px 14px", background: C.card, color: C.ink, fontSize: 13.5, fontFamily: "inherit" }}>취소</button>
+              </div>
+            )}
+            {libMsg && (
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 14, background: C.warnSoft, border: `1px solid ${C.warn}44`, borderRadius: 11, padding: "11px 14px", color: C.warn, fontSize: 13.5, lineHeight: 1.5 }}>
+                <span>{libMsg}</span>
+                <button className="mg-btn" onClick={() => setLibMsg("")} style={{ border: "none", background: "transparent", color: C.warn, fontFamily: "inherit", fontSize: 16, lineHeight: 1 }}>×</button>
+              </div>
+            )}
+            {backupText && (
+              <div style={{ marginBottom: 14, background: C.card, border: `1px solid ${C.clay}`, borderRadius: 12, padding: "12px 14px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                  <span className="mg-serif" style={{ fontSize: 14, fontWeight: 700 }}>기기 이전 백업 ({backupText.length.toLocaleString()}자)</span>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button className="mg-btn" onClick={() => { const t = document.getElementById("mg-backup-ta"); if (t) { t.focus(); t.select(); try { document.execCommand("copy"); setLibMsg("복사됨 ✓ HTML ⚙ ‘가져오기’에 붙여넣으세요."); } catch (e) {} } }}
+                      style={{ border: "none", borderRadius: 8, padding: "7px 13px", background: C.clay, color: "#fff", fontSize: 12.5, fontWeight: 700, fontFamily: "inherit" }}>전체 복사</button>
+                    <button className="mg-btn" onClick={() => setBackupText("")}
+                      style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: "7px 11px", background: C.card, color: C.ink, fontSize: 12.5, fontFamily: "inherit" }}>닫기</button>
+                  </div>
+                </div>
+                <textarea id="mg-backup-ta" readOnly value={backupText} onFocus={(e) => e.target.select()}
+                  style={{ width: "100%", height: 90, fontFamily: "ui-monospace, monospace", fontSize: 11, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10, background: C.paper, color: C.ink, boxSizing: "border-box", resize: "vertical" }} />
+                <div style={{ fontSize: 12, color: C.muted, marginTop: 6, lineHeight: 1.5 }}>이 내용을 전체 복사 → HTML 버전 상단 ⚙ ‘가져오기’ 칸에 붙여넣고 ‘가져오기’를 누르면 보관함이 그대로 옮겨집니다.</div>
+              </div>
+            )}
+            {library.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "64px 20px", color: C.muted }}>
+                <div className="mg-serif" style={{ fontSize: 17, fontWeight: 700, marginBottom: 7, color: C.ink }}>아직 저장된 문제가 없어요</div>
+                <div style={{ fontSize: 14, lineHeight: 1.6 }}>문제를 분석한 뒤 ‘보관함에 저장’을 누르면 PDF·단원별로 모입니다.</div>
+              </div>
+            ) : openFolder ? (
+              /* ── PDF 폴더 안 ── */
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
+                  <button className="mg-btn" onClick={() => setOpenFolder(null)}
+                    style={{ border: `1px solid ${C.line}`, borderRadius: 10, padding: "8px 13px", background: C.card, color: C.ink, fontSize: 13.5, fontWeight: 700, fontFamily: "inherit" }}>← 보관함</button>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div className="mg-serif" style={{ fontSize: 17, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>📁 {folderMap[openFolder]?.name || "PDF"}</div>
+                    <div style={{ fontSize: 12.5, color: C.muted }}>{folderItems.length}문제 보관됨</div>
+                  </div>
+                  <button className="mg-btn" onClick={() => analyzeMoreFromPdf(openFolder, folderMap[openFolder]?.name)}
+                    style={{ border: "none", borderRadius: 10, padding: "9px 14px", background: C.clay, color: "#fff", fontSize: 13, fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap" }}>＋ 다른 번호 분석</button>
+                </div>
+                <div style={gridStyle}>{folderItems.map(cardEl)}</div>
+              </>
+            ) : openMyFolder ? (
+              /* ── 내 폴더 안 ── */
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
+                  <button className="mg-btn" onClick={() => { setOpenMyFolder(null); setSelecting(false); setSelectedIds([]); }}
+                    style={{ border: `1px solid ${C.line}`, borderRadius: 10, padding: "8px 13px", background: C.card, color: C.ink, fontSize: 13.5, fontWeight: 700, fontFamily: "inherit" }}>← 보관함</button>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div className="mg-serif" style={{ fontSize: 17, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>📁 {myFolders.find(f => f.id === openMyFolder)?.name || "폴더"}</div>
+                    <div style={{ fontSize: 12.5, color: C.muted }}>{myFolderItems.length}문제</div>
+                  </div>
+                  <button className="mg-btn" onClick={() => { setSelecting(s => !s); setSelectedIds([]); }}
+                    style={{ border: `1px solid ${selecting ? C.clay : C.line}`, borderRadius: 10, padding: "8px 14px", background: selecting ? C.claySoft : C.card, color: selecting ? C.clay : C.ink, fontSize: 13, fontWeight: 700, fontFamily: "inherit" }}>{selecting ? "완료" : "선택"}</button>
+                </div>
+                {myFolderItems.length
+                  ? <div style={gridStyle}>{myFolderItems.map(p => cardEl(p, { selecting, draggable: !selecting }))}</div>
+                  : <div style={{ color: C.muted, fontSize: 14, padding: "24px 4px", lineHeight: 1.6 }}>이 폴더는 비어 있어요. ‘미분류’에서 문제를 선택하거나 끌어다 넣어 보세요.</div>}
+                {moveBar()}
+              </>
+            ) : (
+              /* ── 보관함 홈 ── */
+              <>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", gap: 7 }}>
+                    {tabBtn(libMode === "my", () => setLibMode("my"), "내 폴더")}
+                    {tabBtn(libMode === "pdf", () => setLibMode("pdf"), "PDF별")}
+                    {tabBtn(libMode === "unit", () => setLibMode("unit"), "단원별")}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {missingIntent > 0 && (
+                      <button className="mg-btn" onClick={backfillIntent} disabled={backfilling}
+                        style={{ border: `1px solid ${C.clay}`, borderRadius: 10, padding: "8px 14px", background: C.claySoft, color: C.clay, fontSize: 13, fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                        {backfilling ? (backfillMsg || "정리 중…") : `✨ 출제 의도 채우기 (${missingIntent})`}
+                      </button>
+                    )}
+                    <button className="mg-btn" onClick={exportBackup}
+                      style={{ border: `1px solid ${C.line}`, borderRadius: 10, padding: "8px 14px", background: C.card, color: C.ink, fontSize: 13, fontWeight: 400, fontFamily: "inherit", whiteSpace: "nowrap" }}>📦 기기 이전 백업</button>
+                    <button className="mg-btn" onClick={exportHTML}
+                      style={{ border: `1px solid ${C.line}`, borderRadius: 10, padding: "8px 14px", background: C.card, color: C.ink, fontSize: 13, fontWeight: 400, fontFamily: "inherit", whiteSpace: "nowrap" }}>⤓ HTML로 내보내기</button>
+                  </div>
+                </div>
+
+                {libMode === "my" ? (
+                  <>
+                    <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+                      <button className="mg-btn" onClick={() => openNewFolder(false)}
+                        style={{ border: `1px solid ${C.clay}`, borderRadius: 10, padding: "8px 14px", background: C.claySoft, color: C.clay, fontSize: 13, fontWeight: 700, fontFamily: "inherit" }}>＋ 새 폴더</button>
+                      <button className="mg-btn" onClick={() => { setSelecting(s => !s); setSelectedIds([]); }}
+                        style={{ border: `1px solid ${selecting ? C.clay : C.line}`, borderRadius: 10, padding: "8px 14px", background: selecting ? C.claySoft : C.card, color: selecting ? C.clay : C.ink, fontSize: 13, fontWeight: 700, fontFamily: "inherit" }}>{selecting ? "완료" : "선택해서 모으기"}</button>
+                    </div>
+                    {myFolders.length > 0 && (
+                      <div style={{ ...gridStyle, marginBottom: 22 }}>{myFolders.map(myFolderCard)}</div>
+                    )}
+                    <div className="mg-eyebrow" style={{ fontSize: 11, color: C.muted, fontWeight: 700, margin: "4px 0 12px" }}>미분류 · {uncategorized.length}</div>
+                    {uncategorized.length
+                      ? <div style={gridStyle}>{uncategorized.map(p => cardEl(p, { selecting, draggable: !selecting }))}</div>
+                      : <div style={{ color: C.muted, fontSize: 14, padding: "8px 4px" }}>미분류 문제가 없어요.</div>}
+                    {!selecting && myFolders.length === 0 && (
+                      <div style={{ color: C.muted, fontSize: 13, marginTop: 16, lineHeight: 1.6 }}>‘＋ 새 폴더’로 폴더를 만들고, ‘선택해서 모으기’로 문제를 골라 폴더에 담아 보세요. (PC에선 카드를 폴더로 끌어다 놓아도 됩니다.)</div>
+                    )}
+                    {moveBar()}
+                  </>
+                ) : libMode === "pdf" ? (
+                  <>
+                    {folders.length > 0 && (
+                      <div style={{ ...gridStyle, marginBottom: loose.length ? 22 : 0 }}>
+                        {folders.map(fd => {
+                          const nums = fd.items.map(numOf).filter(Boolean).sort((a, b) => Number(a) - Number(b));
+                          const uset = Array.from(new Set(fd.items.flatMap(p => p.concepts || []))).slice(0, 3);
+                          return (
+                            <div key={fd.id} className="mg-card mg-btn" onClick={() => setOpenFolder(fd.id)}
+                              style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 15, padding: 16, cursor: "pointer" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                <span style={{ fontSize: 26 }}>📁</span>
+                                <div style={{ minWidth: 0 }}>
+                                  <div className="mg-serif" style={{ fontSize: 15.5, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{fd.name}</div>
+                                  <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{fd.items.length}문제</div>
+                                </div>
+                              </div>
+                              {nums.length > 0 && <div style={{ fontSize: 12.5, color: C.muted, marginTop: 11, lineHeight: 1.5 }}>문제 {nums.join(", ")}번</div>}
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 10 }}>
+                                {uset.map((c, i) => <span key={i} style={{ fontSize: 11.5, fontWeight: 700, color: C.clay, background: C.claySoft, padding: "3px 9px", borderRadius: 999 }}>{c}</span>)}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {loose.length > 0 && (
+                      <>
+                        <div className="mg-eyebrow" style={{ fontSize: 11, color: C.muted, fontWeight: 700, margin: "4px 0 12px" }}>낱장 (이미지 · {loose.length})</div>
+                        <div style={gridStyle}>{loose.map(cardEl)}</div>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="mg-tabs" style={{ marginBottom: 14 }}>
+                      {tabBtn(activeUnit === "__all", () => setActiveUnit("__all"), `전체 ${library.length}`)}
+                      {units.map(u => tabBtn(activeUnit === u, () => setActiveUnit(u), `${u} ${library.filter(p => (p.concepts || []).includes(u)).length}`))}
+                    </div>
+                    <div style={gridStyle}>{filtered.map(cardEl)}</div>
+                  </>
+                )}
+              </>
+            )}
+          </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Eyebrow({ children, color = C.clay }) {
+  return <div className="mg-eyebrow" style={{ fontSize: 11.5, color, fontWeight: 700 }}>{children}</div>;
+}
+function Block({ title, hint, children }) {
+  return (
+    <section style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 15, padding: "19px 21px", marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 7 }}>
+        <h2 className="mg-serif" style={{ fontSize: 18, fontWeight: 700, margin: 0, letterSpacing: "-.01em" }}>{title}</h2>
+        <span style={{ fontSize: 12.5, color: C.muted }}>{hint}</span>
+      </div>
+      <div>{children}</div>
+    </section>
+  );
+}
+
+
+(async function(){
+  try{ if(window.__mgPull) await window.__mgPull(); }catch(e){}
+  try{
+    var root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(React.createElement(App));
+    var boot=document.getElementById("boot"); if(boot) boot.remove();
+  }catch(e){ if(window.__mgShow) window.__mgShow("렌더 오류: "+(e&&e.message||e)); else throw e; }
+})();
+
+</script>
+</body>
+</html>
