@@ -31,39 +31,33 @@
 const { useState, useRef, useCallback, useEffect } = React;
 function _sheetUrl(){ return (localStorage.getItem("mg_sheet_url")||"").trim(); }
 window.__mgDriveUrl = function(id){ return "https://drive.google.com/thumbnail?id="+encodeURIComponent(id)+"&sz=w1600"; };
-
-/* ---- IndexedDB (5MB 제한 없음) ---- */
 var IDB_NAME="mathguide_drive", IDB_STORE="kv", _idbP=null;
 function _idb(){ if(_idbP) return _idbP; _idbP=new Promise(function(res,rej){ var r=indexedDB.open(IDB_NAME,1); r.onupgradeneeded=function(){ try{ r.result.createObjectStore(IDB_STORE); }catch(e){} }; r.onsuccess=function(){ res(r.result); }; r.onerror=function(){ rej(r.error); }; }); return _idbP; }
 function _idbGet(k){ return _idb().then(function(db){ return new Promise(function(res){ var t=db.transaction(IDB_STORE,"readonly").objectStore(IDB_STORE).get(k); t.onsuccess=function(){ res(t.result==null?null:t.result); }; t.onerror=function(){ res(null); }; }); }); }
 function _idbSet(k,v){ return _idb().then(function(db){ return new Promise(function(res){ var t=db.transaction(IDB_STORE,"readwrite").objectStore(IDB_STORE).put(v,k); t.onsuccess=function(){ res(true); }; t.onerror=function(){ res(false); }; }); }); }
 function _idbDel(k){ return _idb().then(function(db){ return new Promise(function(res){ var t=db.transaction(IDB_STORE,"readwrite").objectStore(IDB_STORE).delete(k); t.onsuccess=function(){ res(true); }; t.onerror=function(){ res(false); }; }); }); }
 function _idbKeys(){ return _idb().then(function(db){ return new Promise(function(res){ var t=db.transaction(IDB_STORE,"readonly").objectStore(IDB_STORE).getAllKeys(); t.onsuccess=function(){ res(t.result||[]); }; t.onerror=function(){ res([]); }; }); }); }
-
-/* ---- 시트/드라이브 전송 ---- */
 function _postSet(k,val){ var url=_sheetUrl(); if(!url) return; try{ fetch(url,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"set",key:k,value:val})}); }catch(e){} }
 function _postImg(k,media,b64){ var url=_sheetUrl(); if(!url) return; try{ fetch(url,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"img",imgKey:k,media:media||"image/jpeg",b64:b64})}); }catch(e){} }
 function _push(k,v){
   var url=_sheetUrl(); if(!url) return;
-  if(k.indexOf("pdf:")===0) return; // PDF 원본 로컬 전용
+  if(k.indexOf("pdf:")===0) return;
   if(k.indexOf("prob:")===0){
     var o; try{ o=JSON.parse(v); }catch(e){ _postSet(k,v); return; }
-    var noImg=Object.assign({},o); delete noImg.b64; delete noImg.media;
-    _postSet(k, JSON.stringify(noImg));        // 설명·분석 → 시트
-    if(o && o.b64){ _postImg(k, o.media, o.b64); } // 사진 원본 → 드라이브
+    var noImg=Object.assign({},o); delete noImg.b64; delete noImg.media; delete noImg.__key;
+    _postSet(k, JSON.stringify(noImg));
+    if(o && o.b64){ _postImg(k, o.media, o.b64); }
     return;
   }
   _postSet(k, v);
 }
 function _del(k){ var url=_sheetUrl(); if(!url) return; try{ fetch(url,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"delete",key:k})}); }catch(e){} }
-
 window.storage = {
   async get(k){ var v=await _idbGet(k); return v==null?null:{key:k,value:v}; },
   async set(k,v){ await _idbSet(k,v); _push(k,v); return {key:k,value:v}; },
   async delete(k){ await _idbDel(k); _del(k); return {key:k,deleted:true}; },
   async list(prefix){ var ks=await _idbKeys(); return {keys: ks.filter(function(k){ return !prefix || (typeof k==="string" && k.indexOf(prefix)===0); })}; },
 };
-
 window.__mgPull = function(){
   return new Promise(function(resolve){
     var url=_sheetUrl(); if(!url){ resolve(false); return; }
@@ -273,13 +267,14 @@ async function loadLibrary() {
     const listed = await window.storage.list("prob:");
     const keys = ((listed && listed.keys) || []).map(k => (typeof k === "string" ? k : k && k.key)).filter(Boolean);
     const items = [];
-    for (const k of keys) { try { const r = await window.storage.get(k); if (r && r.value) items.push(JSON.parse(r.value)); } catch (e) {} }
+    for (const k of keys) { try { const r = await window.storage.get(k); if (r && r.value) { const o = JSON.parse(r.value); o.__key = k; items.push(o); } } catch (e) {} }
     items.sort((a, b) => (b.ts || 0) - (a.ts || 0));
     return items;
   } catch (e) { return []; }
 }
 async function saveProblem(p) { if (window.storage) await window.storage.set("prob:" + p.id, JSON.stringify(p)); }
 async function deleteProblem(id) { if (window.storage) await window.storage.delete("prob:" + id); }
+async function deleteByKey(key) { if (window.storage) await window.storage.delete(key); }
 // PDF 원본 보관 (용량이 허용될 때만). 폴더에서 다른 번호를 바로 분석하기 위함.
 async function savePdfBlob(pdfId, b64) {
   try { if (window.storage && b64 && b64.length < 4800000) await window.storage.set("pdf:" + pdfId, b64); } catch (e) {}
@@ -552,8 +547,9 @@ function App() {
   const removeSaved = async (id, e) => {
     if (e) e.stopPropagation();
     const item = library.find(p => p.id === id);
+    const key = (item && item.__key) ? item.__key : ("prob:" + id);
     try {
-      await deleteProblem(id);
+      await deleteByKey(key);
       const rest = await loadLibrary();
       setLibrary(rest);
       const pid = item && (item.pdfId || (item.result && item.result.pdfId));
@@ -665,7 +661,19 @@ function App() {
     for (const k of ((l && l.keys) || [])) {
       try { const r = await window.storage.get(k); if (r && r.value) { const o = JSON.parse(r.value); if (o.b64) { await window.storage.set(k, r.value); n++; } } } catch (e) {}
     }
-    setCfgMsg(n + "개 이미지 시트에 업로드(압축). 다른 기기에서 ⚙ 동기화하세요.");
+    setCfgMsg(n + "개 이미지 업로드 시작. 다른 기기에서 ⚙ 동기화하세요.");
+  };
+  const cfgCheckImages = async () => {
+    const l = await window.storage.list("prob:");
+    let drive = 0, local = 0, none = 0, sample = "";
+    for (const k of ((l && l.keys) || [])) {
+      try { const r = await window.storage.get(k); if (!r || !r.value) continue; const o = JSON.parse(r.value);
+        if (o.b64) local++;
+        else if (o.imgId) { drive++; if (!sample && typeof window !== "undefined" && window.__mgDriveUrl) sample = window.__mgDriveUrl(o.imgId); }
+        else none++;
+      } catch (e) {}
+    }
+    setCfgMsg(`사진 상태 — 드라이브연결 ${drive} · 로컬원본 ${local} · 사진없음 ${none}` + (sample ? `  |  예시 링크: ${sample}` : ""));
   };
 
   const exportHTML = () => {
@@ -714,7 +722,7 @@ function App() {
         style={{ background: C.card, border: `2px solid ${sel ? C.clay : C.line}`, borderRadius: 15, padding: 13, cursor: "pointer", position: "relative" }}>
         <div style={{ borderRadius: 10, overflow: "hidden", border: `1px solid ${C.line}`, height: 120, background: C.paper }}>
           {imgSrc
-            ? <img src={imgSrc} loading="lazy" alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            ? <img src={imgSrc} loading="lazy" alt="" onError={(e) => { const t = e.target; if (t.dataset.fb) return; t.dataset.fb = 1; const m = String(t.src).match(/[?&]id=([^&]+)/); if (m) t.src = "https://lh3.googleusercontent.com/d/" + m[1] + "=w1600"; }} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
             : <div style={{ height: "100%", padding: "12px 13px", display: "flex", flexDirection: "column", gap: 4, overflow: "hidden" }}>
                 <span className="mg-eyebrow" style={{ fontSize: 10.5, color: C.clay, fontWeight: 700 }}>{numOf(p) ? `${numOf(p)}번 · PDF` : "PDF"}</span>
                 <span style={{ fontSize: 12, color: C.muted, lineHeight: 1.45, display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{String(p.result?.problemText || "").replace(/\$/g, "")}</span>
@@ -847,6 +855,7 @@ function App() {
                 <button className="mg-btn" onClick={cfgSave} style={cfgGold}>저장</button>
                 <button className="mg-btn" onClick={cfgSync} style={cfgOut}>↻ 동기화 (새로고침)</button>
                 <button className="mg-btn" onClick={cfgPushImages} style={cfgOut}>🖼 이미지 시트에 올리기</button>
+                <button className="mg-btn" onClick={cfgCheckImages} style={cfgOut}>🔍 사진 링크 점검</button>
               </div>
               <div style={{ borderTop: `1px dashed ${C.line}`, paddingTop: 14 }}>
                 <label style={{ ...cfgLbl, marginTop: 0 }}>가져오기 (보관함 복원) <span style={cfgHint}>아티팩트 ‘📦 기기 이전 백업’에서 복사한 내용을 붙여넣기</span></label>
@@ -868,7 +877,7 @@ function App() {
             {preview ? (
               <div>
                 <div style={{ borderRadius: 13, overflow: "hidden", border: `1px solid ${C.line}` }}>
-                  <img src={preview} alt="업로드한 수학 문제" style={{ width: "100%", display: "block", maxHeight: 360, objectFit: "contain", background: C.card }} />
+                  <img src={preview} alt="업로드한 수학 문제" onError={(e) => { const t = e.target; if (t.dataset.fb) return; t.dataset.fb = 1; const m = String(t.src).match(/[?&]id=([^&]+)/); if (m) t.src = "https://lh3.googleusercontent.com/d/" + m[1] + "=w1600"; }} style={{ width: "100%", display: "block", maxHeight: 360, objectFit: "contain", background: C.card }} />
                 </div>
                 <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
                   <button className="mg-btn" onClick={analyze} disabled={status === "loading"}
