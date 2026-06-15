@@ -416,6 +416,8 @@ function App() {
   const [dragOverId, setDragOverId] = useState(null);  // 그 위에 올라간 대상 id
   const [navIds, setNavIds] = useState([]);            // 보관 문제 보기에서 이전/다음 이동 순서
   const [showImport, setShowImport] = useState(false); // 보관함 가져오기 패널
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
   const inputRef = useRef(null);
   const mathRef = useRef(null);
 
@@ -514,7 +516,7 @@ function App() {
           setStatus("error"); return;
         }
         const a = await askClaude([], ANALYZE_TEXT(t.problemText));
-        const res = { ...a, problemText: t.problemText, number: num, pdfId, pdfName };
+        const res = { ...a, summary: (num ? num + ". " : "") + (a.summary || "제목 없는 문제"), problemText: t.problemText, number: num, pdfId, pdfName };
         setResult(res); setRevealed(1);
         const id = currentId || ("p" + Date.now());
         const rec = { id, ts: Date.now(), summary: res.summary || "제목 없는 문제", concepts: Array.isArray(res.concepts) ? res.concepts : [], b64: imgData, media, result: res, solution: null, pdfId: res.pdfId || null, pdfName: res.pdfName || null, number: res.number || null, folderId: currentFolderId || null };
@@ -573,6 +575,17 @@ function App() {
     setCurrentId(id); setSaved(true);
     try { await persist(id, solution); } catch (e) {}
   }, [result, currentId, solution, persist]);
+
+  useEffect(() => { setTitleDraft((result && result.summary) || ""); setEditingTitle(false); }, [currentId]);
+  const commitTitle = async () => {
+    const v = (titleDraft || "").trim() || "제목 없는 문제";
+    setResult(r => (r ? { ...r, summary: v } : r));
+    setEditingTitle(false);
+    if (currentId) {
+      const rec = library.find(x => x.id === currentId);
+      if (rec) { try { await saveProblem({ ...rec, summary: v }); } catch (e) {} setLibrary(await loadLibrary()); }
+    }
+  };
 
   const addPhotosToLibrary = (files) => {
     const arr = Array.from(files || []);
@@ -1109,11 +1122,27 @@ function App() {
             {status === "done" && result && result.summary && (
               <section style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 15, padding: "18px 21px", marginTop: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-                  <div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
                     <Eyebrow>이 문제는</Eyebrow>
-                    <p className="mg-serif" style={{ fontSize: 21, lineHeight: 1.5, margin: "9px 0 0", fontWeight: 400 }}>{result.summary}</p>
+                    {editingTitle ? (
+                      <div style={{ marginTop: 8 }}>
+                        <textarea value={titleDraft} onChange={(e) => setTitleDraft(e.target.value)} autoFocus rows={2}
+                          placeholder="예: 26. 구간별 함수의 연속  ← 앞에 번호를 적어두면 번호순 정렬돼요"
+                          style={{ width: "100%", fontFamily: "inherit", fontSize: 18, lineHeight: 1.5, border: `1px solid ${C.clay}`, borderRadius: 10, padding: "9px 11px", background: C.paper, color: C.ink, boxSizing: "border-box", resize: "vertical" }} />
+                        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                          <button className="mg-btn" onClick={commitTitle} style={{ border: "none", borderRadius: 9, padding: "8px 15px", background: C.clay, color: "#fff", fontSize: 13, fontWeight: 700, fontFamily: "inherit" }}>저장</button>
+                          <button className="mg-btn" onClick={() => { setEditingTitle(false); setTitleDraft((result && result.summary) || ""); }} style={{ border: `1px solid ${C.line}`, borderRadius: 9, padding: "8px 13px", background: C.card, color: C.ink, fontSize: 13, fontFamily: "inherit" }}>취소</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                        <p className="mg-serif" style={{ fontSize: 21, lineHeight: 1.5, margin: "9px 0 0", fontWeight: 400, flex: 1, minWidth: 0 }}>{result.summary}</p>
+                        <button className="mg-btn" onClick={() => { setTitleDraft((result && result.summary) || ""); setEditingTitle(true); }} title="제목 수정"
+                          style={{ flexShrink: 0, marginTop: 9, border: `1px solid ${C.line}`, borderRadius: 8, padding: "4px 9px", background: C.card, color: C.clay, fontSize: 12.5, fontWeight: 700, fontFamily: "inherit" }}>✏ 수정</button>
+                      </div>
+                    )}
                   </div>
-                  <span style={{ flexShrink: 0, fontSize: 12.5, color: C.muted, fontWeight: 700, whiteSpace: "nowrap", marginTop: 4 }}>✓ 보관함에 저장됨</span>
+                  <span style={{ flexShrink: 0, fontSize: 12.5, color: C.muted, fontWeight: 700, whiteSpace: "nowrap", marginTop: 4 }}>✓ 저장됨</span>
                 </div>
                 {Array.isArray(result.concepts) && result.concepts.length > 0 && (
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 15 }}>
