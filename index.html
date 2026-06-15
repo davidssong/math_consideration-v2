@@ -38,7 +38,17 @@ function _idbSet(k,v){ return _idb().then(function(db){ return new Promise(funct
 function _idbDel(k){ return _idb().then(function(db){ return new Promise(function(res){ var t=db.transaction(IDB_STORE,"readwrite").objectStore(IDB_STORE).delete(k); t.onsuccess=function(){ res(true); }; t.onerror=function(){ res(false); }; }); }); }
 function _idbKeys(){ return _idb().then(function(db){ return new Promise(function(res){ var t=db.transaction(IDB_STORE,"readonly").objectStore(IDB_STORE).getAllKeys(); t.onsuccess=function(){ res(t.result||[]); }; t.onerror=function(){ res([]); }; }); }); }
 function _postSet(k,val){ var url=_sheetUrl(); if(!url) return; try{ fetch(url,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"set",key:k,value:val})}); }catch(e){} }
-function _postImg(k,media,b64){ var url=_sheetUrl(); if(!url) return; try{ fetch(url,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"img",imgKey:k,media:media||"image/jpeg",b64:b64})}); }catch(e){} }
+function _postImg(k,media,b64,imgName){ var url=_sheetUrl(); if(!url) return; try{ fetch(url,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"img",imgKey:k,media:media||"image/jpeg",b64:b64,imgName:imgName||""})}); }catch(e){} }
+function _imgName(o){
+  try{
+    var d = (o && o.ts) ? new Date(o.ts) : new Date();
+    var p2 = function(n){ return (n<10?"0":"")+n; };
+    var name = String(d.getFullYear()).slice(2)+p2(d.getMonth()+1)+p2(d.getDate())+"_"+p2(d.getHours())+"-"+p2(d.getMinutes());
+    var num = (o && (o.number || (o.result && o.result.number))) || "";
+    if(!num){ var m=String((o&&o.summary)||"").match(/\d+/); num = m?m[0]:""; }
+    return name + (num?("_"+num+"번"):"") + ".jpg";
+  }catch(e){ return ""; }
+}
 function _push(k,v){
   var url=_sheetUrl(); if(!url) return;
   if(k.indexOf("pdf:")===0) return;
@@ -46,7 +56,7 @@ function _push(k,v){
     var o; try{ o=JSON.parse(v); }catch(e){ _postSet(k,v); return; }
     var noImg=Object.assign({},o); delete noImg.b64; delete noImg.media; delete noImg.__key;
     _postSet(k, JSON.stringify(noImg));
-    if(o && o.b64){ _postImg(k, o.media, o.b64); }
+    if(o && o.b64){ _postImg(k, o.media, o.b64, _imgName(o)); }
     return;
   }
   _postSet(k, v);
@@ -297,6 +307,18 @@ async function loadFolders() {
 }
 async function saveFolder(f) { if (window.storage) await window.storage.set("folder:" + f.id, JSON.stringify(f)); }
 async function deleteFolderKey(id) { if (window.storage) await window.storage.delete("folder:" + id); }
+// 직접배치 순서 (컨텍스트별 id 배열). 한 컨텍스트=한 레코드라 재배치 시 쓰기 1회.
+async function loadOrders() {
+  try {
+    if (!window.storage) return {};
+    const l = await window.storage.list("order:");
+    const keys = ((l && l.keys) || []).map(k => (typeof k === "string" ? k : k && k.key)).filter(Boolean);
+    const map = {};
+    for (const k of keys) { try { const r = await window.storage.get(k); if (r && r.value) map[k.slice(6)] = JSON.parse(r.value); } catch (e) {} }
+    return map;
+  } catch (e) { return {}; }
+}
+async function saveOrder(ctx, ids) { if (window.storage) { try { await window.storage.set("order:" + ctx, JSON.stringify(ids)); } catch (e) {} } }
 
 function escHtml(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 function buildExportHTML(lib) {
@@ -383,6 +405,11 @@ function App() {
   const [currentFolderId, setCurrentFolderId] = useState(null);
   const [currentId, setCurrentId] = useState(null);
   const [saved, setSaved] = useState(false);
+  const [sortMode, setSortMode] = useState("name");   // name(번호순) | recent(최신순) | manual(직접배치)
+  const [orderMap, setOrderMap] = useState({});        // { ctxKey: [id, id, ...] } 직접배치 순서
+  const [dragId, setDragId] = useState(null);          // 재배치 중인 문제 id
+  const [dragOverId, setDragOverId] = useState(null);  // 그 위에 올라간 대상 id
+  const [navIds, setNavIds] = useState([]);            // 보관 문제 보기에서 이전/다음 이동 순서
   const inputRef = useRef(null);
   const mathRef = useRef(null);
 
@@ -402,7 +429,7 @@ function App() {
     document.body.appendChild(s1);
   }, []);
 
-  useEffect(() => { (async () => { setLibrary(await loadLibrary()); setMyFolders(await loadFolders()); })(); }, []);
+  useEffect(() => { (async () => { setLibrary(await loadLibrary()); setMyFolders(await loadFolders()); setOrderMap(await loadOrders()); })(); }, []);
 
   useEffect(() => {
     if (!katexReady || !mathRef.current || !window.renderMathInElement) return;
@@ -479,8 +506,12 @@ function App() {
           setStatus("error"); return;
         }
         const a = await askClaude([], ANALYZE_TEXT(t.problemText));
-        setResult({ ...a, problemText: t.problemText, number: num, pdfId, pdfName });
-        setRevealed(1); setCurrentId(null); setSaved(false); setStatus("done");
+        const res = { ...a, problemText: t.problemText, number: num, pdfId, pdfName };
+        setResult(res); setRevealed(1);
+        const id = "p" + Date.now();
+        const rec = { id, ts: Date.now(), summary: res.summary || "제목 없는 문제", concepts: Array.isArray(res.concepts) ? res.concepts : [], b64: imgData, media, result: res, solution: null, pdfId: res.pdfId || null, pdfName: res.pdfName || null, number: res.number || null, folderId: currentFolderId || null };
+        try { await saveProblem(rec); if (res.pdfId && pdfB64) await savePdfBlob(res.pdfId, pdfB64); } catch (e) {}
+        setCurrentId(id); setSaved(true); setLibrary(await loadLibrary()); setStatus("done");
       } catch (e) {
         setErrMsg("분석 실패: " + (e.message || "알 수 없는 오류") + " — PDF 입력이 이 환경에서 막히면, 문제를 캡처해 이미지로 올려보세요.");
         setStatus("error");
@@ -492,9 +523,13 @@ function App() {
     try {
       const parsed = await askClaude([imgBlock(media, imgData)], ANALYZE_PROMPT);
       if (parsed.readable === false) { setErrMsg(parsed.message || "사진 속 문제를 또렷하게 읽기 어려워요."); setStatus("error"); return; }
-      setResult(parsed); setRevealed(1); setCurrentId(null); setSaved(false); setStatus("done");
+      setResult(parsed); setRevealed(1);
+      const id = "p" + Date.now();
+      const rec = { id, ts: Date.now(), summary: parsed.summary || "제목 없는 문제", concepts: Array.isArray(parsed.concepts) ? parsed.concepts : [], b64: imgData, media, result: parsed, solution: null, pdfId: parsed.pdfId || null, pdfName: parsed.pdfName || null, number: parsed.number || null, folderId: currentFolderId || null };
+      try { await saveProblem(rec); } catch (e) {}
+      setCurrentId(id); setSaved(true); setLibrary(await loadLibrary()); setStatus("done");
     } catch (e) { setErrMsg("분석 실패: " + (e.message || "알 수 없는 오류") + " — 다시 시도해 주세요."); setStatus("error"); }
-  }, [imgData, media, isPdf, pdfB64, probNum, pdfId, pdfName]);
+  }, [imgData, media, isPdf, pdfB64, probNum, pdfId, pdfName, currentFolderId]);
 
   const persist = useCallback(async (id, sol) => {
     if (!result) return;
@@ -531,7 +566,7 @@ function App() {
     try { await persist(id, solution); } catch (e) {}
   }, [result, currentId, solution, persist]);
 
-  const openSaved = (p) => {
+  const openSaved = (p, navList) => {
     setResult(p.result || null); setSolution(p.solution || null);
     setSolState(p.solution ? "done" : "idle");
     setImgData(p.b64 || null); setMedia(p.media || null);
@@ -541,7 +576,16 @@ function App() {
     setCurrentFolderId(p.folderId || null);
     setRevealed(Array.isArray(p.result?.approach) ? p.result.approach.length : 1);
     setCurrentId(p.id); setSaved(true); setStatus("done"); setErrMsg(""); setDiag("");
+    setNavIds(Array.isArray(navList) && navList.length ? navList : library.map(x => x.id));
     setView("analyze"); window.scrollTo(0, 0);
+  };
+  const goAdjacent = (dir) => {
+    const i = navIds.indexOf(currentId);
+    if (i < 0) return;
+    const tid = navIds[i + dir];
+    if (!tid) return;
+    const p = library.find(x => x.id === tid);
+    if (p) openSaved(p, navIds);
   };
 
   const removeSaved = async (id, e) => {
@@ -711,16 +755,78 @@ function App() {
   const uncategorized = library.filter(p => !p.folderId);
   const missingIntent = library.filter(p => p.result && !p.result.intent).length;
 
+  // ---- 정렬 / 직접배치 ----
+  const elecRank = (s) => (/확통|확률/.test(s) ? 0 : /미적/.test(s) ? 1 : /기하/.test(s) ? 2 : -1);
+  const cmpName = (a, b) => {
+    const sa = String(a.summary || ""), sb = String(b.summary || "");
+    const na = parseInt((sa.match(/\d+/) || ["9999"])[0], 10), nb = parseInt((sb.match(/\d+/) || ["9999"])[0], 10);
+    if (na !== nb) return na - nb;
+    const ea = elecRank(sa), eb = elecRank(sb);
+    if (ea !== eb) return ea - eb;
+    return sa.localeCompare(sb, "ko") || (a.ts || 0) - (b.ts || 0);
+  };
+  const applySort = (items, ctx) => {
+    const arr = items.slice();
+    if (sortMode === "recent") return arr.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    if (sortMode === "name") return arr.sort(cmpName);
+    const ord = orderMap[ctx] || [];          // manual
+    const pos = {}; ord.forEach((id, i) => { pos[id] = i; });
+    return arr.sort((a, b) => {
+      const pa = pos[a.id], pb = pos[b.id];
+      if (pa != null && pb != null) return pa - pb;
+      if (pa != null) return -1;
+      if (pb != null) return 1;
+      return (b.ts || 0) - (a.ts || 0);
+    });
+  };
+  const doReorder = (ctx, sortedItems, fromId, toId) => {
+    const ids = sortedItems.map(it => it.id);
+    const fi = ids.indexOf(fromId); if (fi >= 0) ids.splice(fi, 1);
+    let ti = ids.indexOf(toId); if (ti < 0) ti = ids.length;
+    ids.splice(ti, 0, fromId);                 // 대상 카드 앞에 끼워 넣기
+    setOrderMap(m => ({ ...m, [ctx]: ids }));
+    saveOrder(ctx, ids);
+    setSortMode("manual");
+  };
+  const startReorder = (e, p, ctx, sortedItems) => {
+    e.preventDefault(); e.stopPropagation();
+    setDragId(p.id); setDragOverId(p.id);
+    const pidUnder = (ev) => { const el = document.elementFromPoint(ev.clientX, ev.clientY); const c = el && el.closest && el.closest("[data-pid]"); return c ? c.getAttribute("data-pid") : null; };
+    const move = (ev) => { ev.preventDefault(); setDragOverId(pidUnder(ev)); };
+    const up = (ev) => {
+      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+      const toId = pidUnder(ev); setDragId(null); setDragOverId(null);
+      if (toId && toId !== p.id) doReorder(ctx, sortedItems, p.id, toId);
+    };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  };
+  const sortBar = () => (
+    <div style={{ display: "flex", gap: 6, alignItems: "center", margin: "2px 0 13px", flexWrap: "wrap" }}>
+      <span style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: ".04em" }}>정렬</span>
+      {[["name", "번호순"], ["recent", "최신순"], ["manual", "직접배치"]].map(([m, label]) => (
+        <button key={m} className="mg-btn" onClick={() => setSortMode(m)}
+          style={{ border: `1px solid ${sortMode === m ? C.clay : C.line}`, background: sortMode === m ? C.clay : C.card, color: sortMode === m ? "#fff" : C.ink, borderRadius: 999, padding: "5px 13px", fontSize: 12.5, fontWeight: 700, fontFamily: "inherit" }}>{label}</button>
+      ))}
+      {sortMode === "manual" && <span style={{ fontSize: 11, color: C.muted }}>· 카드 ⠿ 손잡이를 끌어 옮기기</span>}
+    </div>
+  );
+
   const cardEl = (p, opt = {}) => {
     const sel = selectedIds.includes(p.id);
     const imgSrc = mgImgUrl(p);
+    const isOver = opt.reorder && dragOverId === p.id && dragId && dragId !== p.id;
+    const isDragging = opt.reorder && dragId === p.id;
     return (
-      <div key={p.id} className="mg-card mg-btn"
+      <div key={p.id} data-pid={p.id} className="mg-card mg-btn"
         draggable={!!opt.draggable}
         onDragStart={opt.draggable ? (e) => { e.dataTransfer.setData("text/plain", p.id); e.dataTransfer.effectAllowed = "move"; } : undefined}
-        onClick={() => (opt.selecting ? toggleSelect(p.id) : openSaved(p))}
-        style={{ background: C.card, border: `2px solid ${sel ? C.clay : C.line}`, borderRadius: 15, padding: 13, cursor: "pointer", position: "relative" }}>
-        <div style={{ borderRadius: 10, overflow: "hidden", border: `1px solid ${C.line}`, height: 120, background: C.paper }}>
+        onClick={() => (opt.selecting ? toggleSelect(p.id) : openSaved(p, (opt.sortedItems || library).map(x => x.id)))}
+        style={{ background: C.card, border: `2px solid ${isOver ? C.clay : sel ? C.clay : C.line}`, borderRadius: 15, padding: 13, cursor: "pointer", position: "relative", opacity: isDragging ? .45 : 1, boxShadow: isOver ? `0 -3px 0 ${C.clay} inset` : "none" }}>
+        {opt.reorder && (
+          <div onPointerDown={(e) => startReorder(e, p, opt.ctx, opt.sortedItems)} onClick={(e) => e.stopPropagation()}
+            title="끌어서 순서 이동"
+            style={{ position: "absolute", top: 9, left: 9, zIndex: 3, width: 30, height: 30, borderRadius: 8, background: "rgba(50,43,33,.55)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, cursor: "grab", touchAction: "none", lineHeight: 1 }}>⠿</div>
+        )}        <div style={{ borderRadius: 10, overflow: "hidden", border: `1px solid ${C.line}`, height: 120, background: C.paper }}>
           {imgSrc
             ? <img src={imgSrc} loading="lazy" alt="" onError={(e) => { const t = e.target; if (t.dataset.fb) return; t.dataset.fb = 1; const m = String(t.src).match(/[?&]id=([^&]+)/); if (m) t.src = "https://lh3.googleusercontent.com/d/" + m[1] + "=w1600"; }} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
             : <div style={{ height: "100%", padding: "12px 13px", display: "flex", flexDirection: "column", gap: 4, overflow: "hidden" }}>
@@ -871,6 +977,21 @@ function App() {
 
         {view === "analyze" && (
           <div ref={mathRef}>
+          {(() => {
+            const i = navIds.indexOf(currentId);
+            if (!(currentId && i >= 0 && navIds.length > 1)) return null;
+            const arrow = (dir, side, show) => (
+              <button className="mg-btn" onClick={() => goAdjacent(dir)} disabled={!show}
+                title={dir < 0 ? "이전 문제" : "다음 문제"}
+                style={{ position: "fixed", top: "50%", transform: "translateY(-50%)", [side]: 6, zIndex: 40, width: 44, height: 64, borderRadius: 13, border: `1px solid ${C.line}`, background: "rgba(251,246,236,.55)", backdropFilter: "blur(3px)", color: C.clay, fontSize: 26, fontWeight: 700, fontFamily: "inherit", lineHeight: 1, cursor: show ? "pointer" : "default", opacity: show ? .8 : .2, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                {dir < 0 ? "‹" : "›"}
+              </button>
+            );
+            return (<>
+              {arrow(-1, "left", i > 0)}
+              {arrow(1, "right", i < navIds.length - 1)}
+            </>);
+          })()}
           <div style={heroStyle}>
             {titleRow}
             <section style={{ marginTop: 22, background: C.card, border: `1px solid ${C.line}`, borderRadius: 18, padding: 22, boxShadow: "0 14px 34px -24px rgba(0,0,0,.5)" }}>
@@ -953,10 +1074,7 @@ function App() {
                     <Eyebrow>이 문제는</Eyebrow>
                     <p className="mg-serif" style={{ fontSize: 21, lineHeight: 1.5, margin: "9px 0 0", fontWeight: 400 }}>{result.summary}</p>
                   </div>
-                  <button className="mg-btn" onClick={saveCurrent} disabled={saved}
-                    style={{ flexShrink: 0, border: `1px solid ${saved ? C.line : C.clay}`, borderRadius: 10, padding: "9px 14px", background: saved ? C.paper : C.claySoft, color: saved ? C.muted : C.clay, fontSize: 13.5, fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap" }}>
-                    {saved ? "✓ 보관됨" : "＋ 보관함에 저장"}
-                  </button>
+                  <span style={{ flexShrink: 0, fontSize: 12.5, color: C.muted, fontWeight: 700, whiteSpace: "nowrap", marginTop: 4 }}>✓ 보관함에 저장됨</span>
                 </div>
                 {Array.isArray(result.concepts) && result.concepts.length > 0 && (
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 15 }}>
@@ -1065,6 +1183,12 @@ function App() {
         {view === "library" && (
           <>
           <div style={heroStyle}>{titleRow}</div>
+          <div style={{ position: "relative", marginTop: 14, marginBottom: 2, border: `1px solid ${C.clay}`, borderRadius: 12, padding: "12px 16px", background: C.claySoft, color: C.clay, fontSize: 14.5, fontWeight: 700, textAlign: "center" }}>
+            <span style={{ fontSize: 16 }}>＋</span> 사진·PDF 올려서 새 문제 분석
+            <input type="file" accept="image/*,application/pdf"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) { reset(); setView("analyze"); window.scrollTo(0, 0); pickFile(f); } }}
+              style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", opacity: 0, fontSize: 0, cursor: "pointer" }} aria-label="사진 또는 PDF 올리기" />
+          </div>
           <div className="mg-reveal">
             {showNewFolder && (
               <div style={{ display: "flex", gap: 8, marginBottom: 14, alignItems: "center", background: C.card, border: `1px solid ${C.clay}`, borderRadius: 12, padding: "12px 14px", flexWrap: "wrap" }}>
@@ -1116,7 +1240,10 @@ function App() {
                   <button className="mg-btn" onClick={() => analyzeMoreFromPdf(openFolder, folderMap[openFolder]?.name)}
                     style={{ border: "none", borderRadius: 10, padding: "9px 14px", background: C.clay, color: "#fff", fontSize: 13, fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap" }}>＋ 다른 번호 분석</button>
                 </div>
-                <div style={gridStyle}>{folderItems.map(cardEl)}</div>
+                {sortBar()}
+                {(() => { const ctx = "pdf:" + openFolder; const arr = applySort(folderItems, ctx); return (
+                  <div style={gridStyle}>{arr.map(p => cardEl(p, { reorder: sortMode === "manual", ctx, sortedItems: arr }))}</div>
+                ); })()}
               </>
             ) : openMyFolder ? (
               /* ── 내 폴더 안 ── */
@@ -1131,8 +1258,11 @@ function App() {
                   <button className="mg-btn" onClick={() => { setSelecting(s => !s); setSelectedIds([]); }}
                     style={{ border: `1px solid ${selecting ? C.clay : C.line}`, borderRadius: 10, padding: "8px 14px", background: selecting ? C.claySoft : C.card, color: selecting ? C.clay : C.ink, fontSize: 13, fontWeight: 700, fontFamily: "inherit" }}>{selecting ? "완료" : "선택"}</button>
                 </div>
+                {myFolderItems.length ? sortBar() : null}
                 {myFolderItems.length
-                  ? <div style={gridStyle}>{myFolderItems.map(p => cardEl(p, { selecting, draggable: !selecting }))}</div>
+                  ? (() => { const ctx = "folder:" + openMyFolder; const arr = applySort(myFolderItems, ctx); return (
+                      <div style={gridStyle}>{arr.map(p => cardEl(p, { selecting, draggable: !selecting, reorder: sortMode === "manual" && !selecting, ctx, sortedItems: arr }))}</div>
+                    ); })()
                   : <div style={{ color: C.muted, fontSize: 14, padding: "24px 4px", lineHeight: 1.6 }}>이 폴더는 비어 있어요. ‘미분류’에서 문제를 선택하거나 끌어다 넣어 보세요.</div>}
                 {moveBar()}
               </>
@@ -1171,8 +1301,11 @@ function App() {
                       <div style={{ ...gridStyle, marginBottom: 22 }}>{myFolders.map(myFolderCard)}</div>
                     )}
                     <div className="mg-eyebrow" style={{ fontSize: 11, color: C.muted, fontWeight: 700, margin: "4px 0 12px" }}>미분류 · {uncategorized.length}</div>
+                    {uncategorized.length ? sortBar() : null}
                     {uncategorized.length
-                      ? <div style={gridStyle}>{uncategorized.map(p => cardEl(p, { selecting, draggable: !selecting }))}</div>
+                      ? (() => { const ctx = "__loose"; const arr = applySort(uncategorized, ctx); return (
+                          <div style={gridStyle}>{arr.map(p => cardEl(p, { selecting, draggable: !selecting, reorder: sortMode === "manual" && !selecting, ctx, sortedItems: arr }))}</div>
+                        ); })()
                       : <div style={{ color: C.muted, fontSize: 14, padding: "8px 4px" }}>미분류 문제가 없어요.</div>}
                     {!selecting && myFolders.length === 0 && (
                       <div style={{ color: C.muted, fontSize: 13, marginTop: 16, lineHeight: 1.6 }}>‘＋ 새 폴더’로 폴더를 만들고, ‘선택해서 모으기’로 문제를 골라 폴더에 담아 보세요. (PC에선 카드를 폴더로 끌어다 놓아도 됩니다.)</div>
@@ -1208,7 +1341,10 @@ function App() {
                     {loose.length > 0 && (
                       <>
                         <div className="mg-eyebrow" style={{ fontSize: 11, color: C.muted, fontWeight: 700, margin: "4px 0 12px" }}>낱장 (이미지 · {loose.length})</div>
-                        <div style={gridStyle}>{loose.map(cardEl)}</div>
+                        {sortBar()}
+                        {(() => { const ctx = "__loose_pdf"; const arr = applySort(loose, ctx); return (
+                          <div style={gridStyle}>{arr.map(p => cardEl(p, { reorder: sortMode === "manual", ctx, sortedItems: arr }))}</div>
+                        ); })()}
                       </>
                     )}
                   </>
@@ -1218,7 +1354,10 @@ function App() {
                       {tabBtn(activeUnit === "__all", () => setActiveUnit("__all"), `전체 ${library.length}`)}
                       {units.map(u => tabBtn(activeUnit === u, () => setActiveUnit(u), `${u} ${library.filter(p => (p.concepts || []).includes(u)).length}`))}
                     </div>
-                    <div style={gridStyle}>{filtered.map(cardEl)}</div>
+                    {sortBar()}
+                    {(() => { const ctx = "__unit:" + activeUnit; const arr = applySort(filtered, ctx); return (
+                      <div style={gridStyle}>{arr.map(p => cardEl(p, { reorder: sortMode === "manual", ctx, sortedItems: arr }))}</div>
+                    ); })()}
                   </>
                 )}
               </>
