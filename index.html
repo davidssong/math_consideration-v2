@@ -752,24 +752,32 @@ function App() {
     setTimeout(() => location.reload(), 800);
   };
   const cfgPushImages = async () => {
-    setCfgMsg("이미지 압축·업로드 중…");
-    const l = await window.storage.list("prob:"); let n = 0;
-    for (const k of ((l && l.keys) || [])) {
-      try { const r = await window.storage.get(k); if (r && r.value) { const o = JSON.parse(r.value); if (o.b64) { await window.storage.set(k, r.value); n++; } } } catch (e) {}
+    const l = await window.storage.list("prob:");
+    const keys = ((l && l.keys) || []);
+    const targets = [];
+    for (const k of keys) {
+      try { const r = await window.storage.get(k); if (r && r.value) { const o = JSON.parse(r.value); if (o.b64) targets.push([k, r.value]); } } catch (e) {}
     }
-    setCfgMsg(n + "개 이미지 업로드 시작. 다른 기기에서 ⚙ 동기화하세요.");
+    const total = targets.length;
+    if (!total) { setCfgMsg("올릴 로컬 사진이 없어요."); return; }
+    for (let i = 0; i < total; i++) {
+      try { await window.storage.set(targets[i][0], targets[i][1]); } catch (e) {}
+      setCfgMsg(`이미지 업로드 중… ${i + 1}/${total} (창을 닫지 마세요)`);
+      await new Promise(res => setTimeout(res, 1200));
+    }
+    setCfgMsg(`${total}개 전송 완료. 10초쯤 뒤 이 기기에서 ↻ 동기화 → 🔍 점검으로 확인하고, 휴대폰에서도 ↻ 동기화하세요.`);
   };
   const cfgCheckImages = async () => {
     const l = await window.storage.list("prob:");
-    let drive = 0, local = 0, none = 0, sample = "";
+    let drive = 0, localOnly = 0, none = 0, sample = "";
     for (const k of ((l && l.keys) || [])) {
       try { const r = await window.storage.get(k); if (!r || !r.value) continue; const o = JSON.parse(r.value);
-        if (o.b64) local++;
-        else if (o.imgId) { drive++; if (!sample && typeof window !== "undefined" && window.__mgDriveUrl) sample = window.__mgDriveUrl(o.imgId); }
+        if (o.imgId) { drive++; if (!sample && typeof window !== "undefined" && window.__mgDriveUrl) sample = window.__mgDriveUrl(o.imgId); }
+        else if (o.b64) localOnly++;
         else none++;
       } catch (e) {}
     }
-    setCfgMsg(`사진 상태 — 드라이브연결 ${drive} · 로컬원본 ${local} · 사진없음 ${none}` + (sample ? `  |  예시 링크: ${sample}` : ""));
+    setCfgMsg(`사진 상태 — 드라이브 올라감 ${drive} · 로컬만(미업로드) ${localOnly} · 없음 ${none}` + (sample ? `  |  예시: ${sample}` : ""));
   };
 
   const exportHTML = () => {
