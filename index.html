@@ -155,27 +155,27 @@ const STYLES = `
 const ANALYZE_PROMPT = `너는 한국 고등학생을 돕는 수학 길잡이야. 업로드된 수학 문제 사진을 분석해.
 규칙: 이 응답에서는 절대 최종 정답이나 끝까지의 계산을 주지 마라. "어떻게 시작하고 어떤 순서로 풀어갈지" 방향만 안내해.
 JSON으로만, 다른 말과 마크다운 백틱 없이 응답:
-{"readable":true 또는 false,"message":"사진을 못 읽을 때만 이유(읽으면 빈 문자열)","summary":"무엇을 구하는 문제인지 한 문장","intent":"추정되는 출제자의 의도와 이 문제로 확인하려는 개념·사고력(2~3문장)","concepts":["관련 단원/개념 2~4개"],"keyTerms":[{"term":"핵심 단어/문구","signal":"이 표현이 주는 신호와 떠올릴 도구·공식(1~2문장)"}],"approach":[{"step":"이 단계에서 할 일(정답 X, 방향만)","why":"왜 이렇게 하는지 짧게"}],"watchOut":["자주 하는 실수 1~3개"]}
-제약(중요): 응답은 반드시 1000토큰 안에 끝나야 하니 매우 간결하게. concepts는 교육과정 단원명 위주(예: 수열, 미분, 확률). keyTerms 3개, approach 3~4단계, watchOut 최대 2개. signal·why는 각각 한 문장. 수식은 LaTeX로 달러기호 사이에(예: 인라인 $a_n=ar^{n-1}$). 한국어로.`;
+{"readable":true 또는 false,"message":"사진을 못 읽을 때만 이유(읽으면 빈 문자열)","summary":"무엇을 구하는 문제인지 한 문장","intent":"추정되는 출제자의 의도와 이 문제로 확인하려는 개념·사고력(2~3문장)","concepts":["관련 단원/개념 2~4개"],"keyTerms":[{"term":"핵심 단어·조건·표현","signal":"이 표현이 주는 신호와, 떠올려야 할 정의·성질·도구·공식을 구체적으로(2~4문장)"}],"approach":[{"step":"이 단계에서 할 일(최종 정답·구체적 수치는 말하지 말고 방법과 방향만)","why":"왜 이렇게 하는지, 어떤 개념·성질에 근거하는지 구체적으로(2~3문장)"}],"watchOut":["자주 하는 실수와 그 이유"]}
+제약(중요): 응답은 4000토큰 안에서 최대한 상세하고 친절하게. 개수 제한 없음 — keyTerms는 문제 속 의미 있는 단어·조건·표현을 빠짐없이 모두, approach는 학생이 막히지 않게 필요한 만큼 단계를 잘게 나눠 충분히 많이 담아라. signal과 why는 충분히 설명(짧게 한 문장으로 줄이지 마라). concepts는 교육과정 단원명 위주(예: 수열, 미분, 확률). 단, 어떤 단계에서도 최종 정답이나 끝까지의 계산 결과는 절대 말하지 마라(방향·방법만). 수식은 LaTeX로 달러기호 사이에(예: 인라인 $a_n=ar^{n-1}$). 한국어로.`;
 
 const SOLVE_PROMPT = `이 수학 문제의 완전한 풀이 과정을 처음부터 끝까지 보여줘. 각 단계마다 무엇을·왜 하는지 설명하고 마지막에 최종 답을 명확히.
 JSON으로만, 다른 말과 마크다운 백틱 없이 응답:
 {"steps":[{"title":"단계 제목","detail":"설명과 계산"}],"finalAnswer":"최종 답"}
-제약(중요): 응답은 반드시 1000토큰 안에 끝나야 하니 간결하게. 단계는 5개 이하, 각 detail은 핵심만. 수식은 모두 인라인 $...$로만 감싸라(달러는 짝을 맞추고 $$는 쓰지 마라). 한국어로.`;
+제약(중요): 응답은 4000토큰 안에서. 단계는 풀이에 필요한 만큼 충분히(과하게 쪼개진 말되 빠뜨리지도 말 것), 각 detail은 계산과 이유를 명확히. 수식은 모두 인라인 $...$로만 감싸라(달러는 짝을 맞추고 $$는 쓰지 마라). 한국어로.`;
 
 // PDF에서 특정 번호 문제만 찾아 옮겨 적기
 const TRANSCRIBE_PDF = (num) => `이 PDF는 수학 시험지야. ${num}번 문제를 찾아라.
 JSON으로만, 다른 말과 마크다운 백틱 없이 응답:
 {"found":true 또는 false,"message":"못 찾으면 이유(찾으면 빈 문자열)","number":"${num}","problemText":"${num}번 문제의 전문을 정확히 옮겨 적기. 수식은 LaTeX로 달러기호 사이에. 그림·그래프·표가 있으면 [그림: 무엇을 나타내는지 한 줄 설명]으로 표기."}
-제약: 반드시 1000토큰 안에. ${num}번 '한 문제'만. 원문 그대로, 임의로 바꾸지 마라. 한국어 설명.`;
+제약: 반드시 4000토큰 안에. ${num}번 '한 문제'만. 원문 그대로, 임의로 바꾸지 마라. 한국어 설명.`;
 
 // 텍스트 문제로 분석
 const ANALYZE_TEXT = (t) => `다음 수학 문제를 분석해. 최종 정답·끝까지의 계산은 주지 말고 접근 방향만.
 [문제]
 ${t}
 [/문제]
-JSON으로만, 백틱 없이: {"summary":"한 문장","intent":"추정되는 출제자의 의도와 이 문제로 확인하려는 개념·사고력(2~3문장)","concepts":["단원/개념 2~4개"],"keyTerms":[{"term":"핵심 단어","signal":"신호·공식 1~2문장"}],"approach":[{"step":"할 일(방향만)","why":"이유 짧게"}],"watchOut":["실수 1~2개"]}
-제약: 1000토큰 내. keyTerms 3개, approach 3~4단계, watchOut 최대 2개. 수식 LaTeX $...$. 한국어.`;
+JSON으로만, 백틱 없이: {"summary":"한 문장","intent":"추정되는 출제자의 의도와 이 문제로 확인하려는 개념·사고력(2~3문장)","concepts":["단원/개념 2~4개"],"keyTerms":[{"term":"핵심 단어·조건·표현","signal":"신호와 떠올려야 할 정의·성질·도구·공식을 구체적으로(2~4문장)"}],"approach":[{"step":"할 일(정답·수치는 말고 방법·방향만)","why":"왜 그렇게 하는지·근거를 구체적으로(2~3문장)"}],"watchOut":["실수와 이유"]}
+제약: 4000토큰 안에서 최대한 상세하게. 개수 제한 없음 — keyTerms는 의미 있는 표현을 빠짐없이, approach는 필요한 만큼 여러 단계로 잘게. 단 최종 정답·끝까지의 계산은 절대 주지 마라. 수식 LaTeX $...$. 한국어.`;
 
 // 텍스트 문제로 풀이
 const SOLVE_TEXT = (t) => `다음 수학 문제의 완전한 풀이를 단계별로, 마지막에 최종 답을 명확히.
@@ -183,7 +183,7 @@ const SOLVE_TEXT = (t) => `다음 수학 문제의 완전한 풀이를 단계별
 ${t}
 [/문제]
 JSON으로만, 백틱 없이: {"steps":[{"title":"제목","detail":"설명·계산"}],"finalAnswer":"최종 답"}
-제약: 1000토큰 내, 5단계 이하. 수식은 인라인 $...$로만(짝 맞춰서, $$ 금지). 한국어.`;
+제약: 4000토큰 내, 단계는 필요한 만큼. 수식은 인라인 $...$로만(짝 맞춰서, $$ 금지). 한국어.`;
 
 // 출제 의도만 따로 (기존 문제 소급용)
 const INTENT_TEXT = (t) => `다음 수학 문제를 보고, 추정되는 출제자의 의도와 이 문제로 무엇(어떤 개념·사고력)을 확인하려는지 정리해.
@@ -262,7 +262,7 @@ async function askClaude(blocks, prompt) {
     resp = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST", headers: { "Content-Type": "application/json", "x-api-key": (localStorage.getItem("mg_api_key")||"").trim(), "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
       body: JSON.stringify({
-        model: (localStorage.getItem("mg_model")||"claude-sonnet-4-6"), max_tokens: 1000,
+        model: (localStorage.getItem("mg_model")||"claude-sonnet-4-6"), max_tokens: 4096,
         messages: [{ role: "user", content: [...blocks, { type: "text", text: prompt }] }],
       }),
     });
@@ -400,6 +400,8 @@ function App() {
   const [confirmDelId, setConfirmDelId] = useState(null);
   const [libMsg, setLibMsg] = useState("");
   const [backupText, setBackupText] = useState("");
+  const [backupInfo, setBackupInfo] = useState("");
+  const [pendingBackupTs, setPendingBackupTs] = useState(0);
   const [showCfg, setShowCfg] = useState(false);
   const [cfgUrl, setCfgUrl] = useState("");
   const [cfgKey, setCfgKey] = useState("");
@@ -721,8 +723,51 @@ function App() {
         try { const r = await window.storage.get(k); if (r && r.value != null) all[k] = r.value; } catch (e) {}
       }
     }
-    setBackupText(JSON.stringify(all));
+    const txt = JSON.stringify(all);
+    setBackupText(txt); setBackupInfo(`전체 백업 · ${txt.length.toLocaleString()}자`); setPendingBackupTs(0);
     setLibMsg("아래 백업 칸의 내용을 전체 복사해서, HTML 버전 ⚙ '가져오기'에 붙여넣으세요.");
+  };
+
+  const _getBackupTs = () => (parseInt(localStorage.getItem("mg_backup_ts") || "0", 10) || 0);
+  const exportBackupNew = async () => {
+    const wm = _getBackupTs();
+    const out = {}; let cnt = 0, withB64 = 0, maxTs = wm;
+    const lp = await window.storage.list("prob:");
+    for (const k of ((lp && lp.keys) || [])) {
+      try { const r = await window.storage.get(k); if (!r || r.value == null) continue;
+        const o = JSON.parse(r.value); const ts = o.ts || 0;
+        if (ts <= wm) continue;
+        const c = Object.assign({}, o); delete c.__key;
+        if (c.imgId) { delete c.b64; delete c.media; } else if (c.b64) { withB64++; }
+        out[k] = JSON.stringify(c); cnt++; if (ts > maxTs) maxTs = ts;
+      } catch (e) {}
+    }
+    const lf = await window.storage.list("folder:");
+    for (const k of ((lf && lf.keys) || [])) { try { const r = await window.storage.get(k); if (r && r.value != null) out[k] = r.value; } catch (e) {} }
+    const txt = JSON.stringify(out);
+    setBackupText(txt); setPendingBackupTs(maxTs);
+    setBackupInfo(`신규 ${cnt}개` + (withB64 ? ` · 사진 포함 ${withB64}개` : " · 사진은 드라이브 링크로 대체") + ` · ${txt.length.toLocaleString()}자`);
+    setLibMsg(cnt ? "복사한 뒤 아래 ‘여기까지 백업함’을 누르면, 다음엔 더 새 문제만 모읍니다." : "마지막 백업 이후 새로 분석한 문제가 없어요.");
+  };
+  const markBackupDone = () => { if (pendingBackupTs) { localStorage.setItem("mg_backup_ts", String(pendingBackupTs)); } setLibMsg("여기까지 백업한 것으로 표시했어요. 다음 ‘신규만 백업’은 이후 문제만 모읍니다."); };
+  const resetBackupWm = () => { localStorage.setItem("mg_backup_ts", "0"); setLibMsg("백업 기준을 처음으로 되돌렸어요. ‘신규만 백업’이 전체를 모읍니다."); };
+
+  const cfgPushNewImages = async () => {
+    const wm = parseInt(localStorage.getItem("mg_imgpush_ts") || "0", 10) || 0;
+    const l = await window.storage.list("prob:");
+    const targets = []; let maxTs = wm;
+    for (const k of ((l && l.keys) || [])) {
+      try { const r = await window.storage.get(k); if (r && r.value) { const o = JSON.parse(r.value); const ts = o.ts || 0; if (o.b64 && ts > wm) { targets.push([k, r.value]); if (ts > maxTs) maxTs = ts; } } } catch (e) {}
+    }
+    const total = targets.length;
+    if (!total) { setCfgMsg("마지막 이후 새로 올릴 사진이 없어요."); return; }
+    for (let i = 0; i < total; i++) {
+      try { await window.storage.set(targets[i][0], targets[i][1]); } catch (e) {}
+      setCfgMsg(`신규 이미지 업로드 중… ${i + 1}/${total} (창을 닫지 마세요)`);
+      await new Promise(res => setTimeout(res, 1200));
+    }
+    localStorage.setItem("mg_imgpush_ts", String(maxTs));
+    setCfgMsg(`${total}개 전송 완료. 이 기기 ↻ 동기화 후, 휴대폰에서도 ↻ 동기화하세요.`);
   };
 
   const openCfg = () => {
@@ -1021,6 +1066,7 @@ function App() {
                 <button className="mg-btn" onClick={cfgSave} style={cfgGold}>저장</button>
                 <button className="mg-btn" onClick={cfgSync} style={cfgOut}>↻ 동기화 (새로고침)</button>
                 <button className="mg-btn" onClick={cfgPushImages} style={cfgOut}>🖼 이미지 시트에 올리기</button>
+                <button className="mg-btn" onClick={cfgPushNewImages} style={cfgOut}>🆕 신규 이미지만 올리기</button>
                 <button className="mg-btn" onClick={cfgCheckImages} style={cfgOut}>🔍 사진 링크 점검</button>
               </div>
               <div style={{ borderTop: `1px dashed ${C.line}`, paddingTop: 14 }}>
@@ -1300,7 +1346,7 @@ function App() {
             {backupText && (
               <div style={{ marginBottom: 14, background: C.card, border: `1px solid ${C.clay}`, borderRadius: 12, padding: "12px 14px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                  <span className="mg-serif" style={{ fontSize: 14, fontWeight: 700 }}>기기 이전 백업 ({backupText.length.toLocaleString()}자)</span>
+                  <span className="mg-serif" style={{ fontSize: 14, fontWeight: 700 }}>{backupInfo || `기기 이전 백업 (${backupText.length.toLocaleString()}자)`}</span>
                   <div style={{ display: "flex", gap: 6 }}>
                     <button className="mg-btn" onClick={() => { const t = document.getElementById("mg-backup-ta"); if (t) { t.focus(); t.select(); try { document.execCommand("copy"); setLibMsg("복사됨 ✓ HTML ⚙ ‘가져오기’에 붙여넣으세요."); } catch (e) {} } }}
                       style={{ border: "none", borderRadius: 8, padding: "7px 13px", background: C.clay, color: "#fff", fontSize: 12.5, fontWeight: 700, fontFamily: "inherit" }}>전체 복사</button>
@@ -1310,7 +1356,15 @@ function App() {
                 </div>
                 <textarea id="mg-backup-ta" readOnly value={backupText} onFocus={(e) => e.target.select()}
                   style={{ width: "100%", height: 90, fontFamily: "ui-monospace, monospace", fontSize: 11, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10, background: C.paper, color: C.ink, boxSizing: "border-box", resize: "vertical" }} />
-                <div style={{ fontSize: 12, color: C.muted, marginTop: 6, lineHeight: 1.5 }}>이 내용을 전체 복사 → HTML 버전 상단 ⚙ ‘가져오기’ 칸에 붙여넣고 ‘가져오기’를 누르면 보관함이 그대로 옮겨집니다.</div>
+                {pendingBackupTs > 0 && (
+                  <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                    <button className="mg-btn" onClick={markBackupDone}
+                      style={{ border: "none", borderRadius: 8, padding: "7px 12px", background: C.clay, color: "#fff", fontSize: 12.5, fontWeight: 700, fontFamily: "inherit" }}>✓ 여기까지 백업함</button>
+                    <button className="mg-btn" onClick={resetBackupWm}
+                      style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: "7px 11px", background: C.card, color: C.muted, fontSize: 12.5, fontFamily: "inherit" }}>↺ 처음부터</button>
+                  </div>
+                )}
+                <div style={{ fontSize: 12, color: C.muted, marginTop: 6, lineHeight: 1.5 }}>이 내용을 전체 복사 → HTML 버전 상단 ⚙ ‘가져오기’ 칸에 붙여넣고 ‘가져오기’를 누르면 보관함이 그대로 옮겨집니다. <b>신규만 백업</b>은 마지막 ‘여기까지 백업함’ 이후 새로 분석한 문제만 모읍니다(사진은 드라이브에 올려두면 링크로 대체돼 용량이 작아져요).</div>
               </div>
             )}
             {library.length === 0 ? (
@@ -1373,8 +1427,10 @@ function App() {
                         {backfilling ? (backfillMsg || "정리 중…") : `✨ 출제 의도 채우기 (${missingIntent})`}
                       </button>
                     )}
+                    <button className="mg-btn" onClick={exportBackupNew}
+                      style={{ border: `1px solid ${C.clay}`, borderRadius: 10, padding: "8px 14px", background: C.claySoft, color: C.clay, fontSize: 13, fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap" }}>📦 신규만 백업</button>
                     <button className="mg-btn" onClick={exportBackup}
-                      style={{ border: `1px solid ${C.line}`, borderRadius: 10, padding: "8px 14px", background: C.card, color: C.ink, fontSize: 13, fontWeight: 400, fontFamily: "inherit", whiteSpace: "nowrap" }}>📦 기기 이전 백업</button>
+                      style={{ border: `1px solid ${C.line}`, borderRadius: 10, padding: "8px 14px", background: C.card, color: C.ink, fontSize: 13, fontWeight: 400, fontFamily: "inherit", whiteSpace: "nowrap" }}>📦 전체 백업</button>
                     <button className="mg-btn" onClick={exportHTML}
                       style={{ border: `1px solid ${C.line}`, borderRadius: 10, padding: "8px 14px", background: C.card, color: C.ink, fontSize: 13, fontWeight: 400, fontFamily: "inherit", whiteSpace: "nowrap" }}>⤓ HTML로 내보내기</button>
                   </div>
