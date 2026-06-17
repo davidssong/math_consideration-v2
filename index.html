@@ -153,7 +153,7 @@ const STYLES = `
 `;
 
 const ANALYZE_PROMPT = `너는 한국 고등학생을 돕는 수학 길잡이야. 업로드된 수학 문제 사진을 분석해.
-규칙: 이 응답에서는 절대 최종 정답이나 끝까지의 계산을 주지 마라. "어떻게 시작하고 어떤 순서로 풀어갈지" 방향만 안내해.
+규칙: 이 응답에서는 절대 최종 정답이나 끝까지의 계산을 주지 마라. "어떻게 시작하고 어떤 순서로 풀어갈지" 방향만 안내해. 식을 읽을 때 제곱근 근호(√)가 덮는 범위를 정확히 판단하라 — 여러 항이 근호 아래 있으면 그 전체를 근호 안에 두어라(첫 항만 근호에 넣고 나머지를 밖으로 빼지 말 것).
 JSON으로만, 다른 말과 마크다운 백틱 없이 응답:
 {"readable":true 또는 false,"message":"사진을 못 읽을 때만 이유(읽으면 빈 문자열)","summary":"무엇을 구하는 문제인지 한 문장","intent":"추정되는 출제자의 의도와 이 문제로 확인하려는 개념·사고력(2~3문장)","concepts":["관련 단원/개념 2~4개"],"keyTerms":[{"term":"핵심 단어·조건·표현","signal":"이 표현이 주는 신호와, 떠올려야 할 정의·성질·도구·공식을 구체적으로(2~4문장)"}],"approach":[{"step":"이 단계에서 할 일(최종 정답·구체적 수치는 말하지 말고 방법과 방향만)","why":"왜 이렇게 하는지, 어떤 개념·성질에 근거하는지 구체적으로(2~3문장)"}],"watchOut":["자주 하는 실수와 그 이유"]}
 제약(중요): 응답은 4000토큰 안에서 최대한 상세하고 친절하게. 개수 제한 없음 — keyTerms는 문제 속 의미 있는 단어·조건·표현을 빠짐없이 모두, approach는 학생이 막히지 않게 필요한 만큼 단계를 잘게 나눠 충분히 많이 담아라. signal과 why는 충분히 설명(짧게 한 문장으로 줄이지 마라). concepts는 교육과정 단원명 위주(예: 수열, 미분, 확률). 단, 어떤 단계에서도 최종 정답이나 끝까지의 계산 결과는 절대 말하지 마라(방향·방법만). 수식은 LaTeX로 달러기호 사이에(예: 인라인 $a_n=ar^{n-1}$). 한국어로.`;
@@ -167,7 +167,7 @@ JSON으로만, 다른 말과 마크다운 백틱 없이 응답:
 const TRANSCRIBE_PDF = (num) => `이 PDF는 수학 시험지야. ${num}번 문제를 찾아라.
 JSON으로만, 다른 말과 마크다운 백틱 없이 응답:
 {"found":true 또는 false,"message":"못 찾으면 이유(찾으면 빈 문자열)","number":"${num}","problemText":"${num}번 문제의 전문을 정확히 옮겨 적기. 수식은 LaTeX로 달러기호 사이에. 그림·그래프·표가 있으면 [그림: 무엇을 나타내는지 한 줄 설명]으로 표기."}
-제약: 반드시 4000토큰 안에. ${num}번 '한 문제'만. 원문 그대로, 임의로 바꾸지 마라. 한국어 설명.`;
+제약: 반드시 4000토큰 안에. ${num}번 '한 문제'만. 원문 그대로, 임의로 바꾸지 마라. 제곱근 근호(√)가 덮는 범위를 정확히 판단하라 — 여러 항이 근호 아래 있으면 그 전체를 하나의 근호로 묶어 옮겨라(첫 항만 근호에 넣고 나머지를 밖으로 빼는 실수 금지). 한국어 설명.`;
 
 // 텍스트 문제로 분석
 const ANALYZE_TEXT = (t) => `다음 수학 문제를 분석해. 최종 정답·끝까지의 계산은 주지 말고 접근 방향만.
@@ -420,6 +420,8 @@ function App() {
   const [showImport, setShowImport] = useState(false); // 보관함 가져오기 패널
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  const [editPText, setEditPText] = useState(false);
+  const [ptextDraft, setPtextDraft] = useState("");
   const inputRef = useRef(null);
   const mathRef = useRef(null);
 
@@ -587,6 +589,22 @@ function App() {
       const rec = library.find(x => x.id === currentId);
       if (rec) { try { await saveProblem({ ...rec, summary: v }); } catch (e) {} setLibrary(await loadLibrary()); }
     }
+  };
+
+  const reanalyzeFromText = async (text) => {
+    const t = (text || "").trim(); if (!t) return;
+    setEditPText(false); setErrMsg(""); setStatus("loading");
+    try {
+      const a = await askClaude([], ANALYZE_TEXT(t));
+      const cur = library.find(x => x.id === currentId) || {};
+      const num = (result && result.number) || cur.number || "";
+      const res = { ...a, summary: (num ? num + ". " : "") + (a.summary || "제목 없는 문제"), problemText: t, number: num || null, pdfId: (result && result.pdfId) || cur.pdfId || null, pdfName: (result && result.pdfName) || cur.pdfName || null };
+      setResult(res); setRevealed(1);
+      const id = currentId || ("p" + Date.now());
+      const rec = { ...cur, id, ts: cur.ts || Date.now(), summary: res.summary, concepts: Array.isArray(res.concepts) ? res.concepts : [], result: res, solution: null, number: res.number, pdfId: res.pdfId, pdfName: res.pdfName, folderId: (cur.folderId != null ? cur.folderId : (currentFolderId || null)) };
+      try { await saveProblem(rec); } catch (e) {}
+      setCurrentId(id); setSaved(true); setLibrary(await loadLibrary()); setStatus("done");
+    } catch (e) { setErrMsg("다시 분석 실패: " + (e.message || "알 수 없는 오류")); setStatus("error"); }
   };
 
   const addPhotosToLibrary = (files) => {
@@ -1169,8 +1187,28 @@ function App() {
 
             {status === "done" && result && result.problemText && (
               <section style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 15, padding: "18px 21px", marginTop: 16 }}>
-                <Eyebrow>{result.number ? `${result.number}번 문제` : "문제"}</Eyebrow>
-                <div className="mg-serif" style={{ fontSize: 16, lineHeight: 1.7, marginTop: 9, whiteSpace: "pre-wrap" }}>{result.problemText}</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                  <Eyebrow>{result.number ? `${result.number}번 문제` : "문제"}</Eyebrow>
+                  {!editPText && (
+                    <button className="mg-btn" onClick={() => { setPtextDraft(result.problemText || ""); setEditPText(true); }}
+                      style={{ flexShrink: 0, border: `1px solid ${C.line}`, borderRadius: 8, padding: "4px 10px", background: C.paper, color: C.clay, fontSize: 12.5, fontWeight: 700, fontFamily: "inherit" }}>✏ 본문 고쳐 다시 분석</button>
+                  )}
+                </div>
+                {editPText ? (
+                  <div style={{ marginTop: 10 }}>
+                    <textarea value={ptextDraft} onChange={(e) => setPtextDraft(e.target.value)} rows={6}
+                      style={{ width: "100%", fontFamily: "ui-monospace, monospace", fontSize: 13.5, lineHeight: 1.6, border: `1px solid ${C.clay}`, borderRadius: 10, padding: "10px 12px", background: C.paper, color: C.ink, boxSizing: "border-box", resize: "vertical" }} />
+                    <div style={{ fontSize: 12, color: C.muted, margin: "6px 0 9px", lineHeight: 1.5 }}>근호(루트)의 범위를 정확히 적어 주세요. 예) 근호 안에 <b>x + x ln x 전체</b>가 들어가야 하면 그렇게요. 고친 본문으로 다시 분석하며 <b>사진 OCR을 건너뜁니다</b>.</div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button className="mg-btn" onClick={() => reanalyzeFromText(ptextDraft)}
+                        style={{ border: "none", borderRadius: 9, padding: "9px 16px", background: C.clay, color: "#fff", fontSize: 13, fontWeight: 700, fontFamily: "inherit" }}>이 본문으로 다시 분석</button>
+                      <button className="mg-btn" onClick={() => setEditPText(false)}
+                        style={{ border: `1px solid ${C.line}`, borderRadius: 9, padding: "9px 13px", background: C.card, color: C.ink, fontSize: 13, fontFamily: "inherit" }}>취소</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mg-serif" style={{ fontSize: 16, lineHeight: 1.7, marginTop: 9, whiteSpace: "pre-wrap" }}>{result.problemText}</div>
+                )}
               </section>
             )}
             {status === "done" && result && result.summary && (
